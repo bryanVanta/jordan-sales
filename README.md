@@ -51,12 +51,13 @@ jordan-salesbot/
 - **Scheduling**: node-cron
 
 ### Services & Integrations
+- **AI/LLM**: OpenRouter (Free `openai/gpt-oss-120b:free` with reasoning)
 - **Web Scraping**: Playwright
 - **Search**: SerpApi
-- **AI**: OpenClaw
 - **Email**: Nodemailer + Resend
 - **WhatsApp**: Twilio
-- **Real-time Database**: Firebase
+- **Real-time Database**: Firebase Firestore
+- **Task Queue**: BullMQ + Redis
 
 ## Getting Started
 
@@ -164,15 +165,42 @@ npm start
    - Scheduled tasks with node-cron
    - Anti-spam mitigation (3-email rotation, random delays)
 
+6. **AI Training System**
+   - Configure custom bot instructions and knowledge base
+   - LLM follows personalized training automatically
+   - Multi-turn conversations with advanced reasoning
+   - Training data stored in Firestore
+
 ## API Documentation
 
-### Backend Routes (coming soon)
-- `GET /api/status` - Service status
-- `POST /api/companies/search` - Search for companies
-- `POST /api/leads` - Create/manage leads
-- `POST /api/campaigns/send` - Send email campaigns
+### Backend Routes
+
+**Companies**
+- `GET /api/companies` - List all companies
+- `POST /api/companies` - Create company
+- `PUT /api/companies/:id` - Update company
+- `DELETE /api/companies/:id` - Delete company
+
+**Leads**
+- `GET /api/leads` - List all leads
+- `POST /api/leads` - Create lead
+- `PUT /api/leads/:id` - Update lead
+- `DELETE /api/leads/:id` - Delete lead
+
+**Messages**
 - `GET /api/messages` - Fetch messages
-- `POST /api/messages/reply` - Reply to messages
+- `POST /api/messages` - Send message
+
+**Training**
+- `GET /api/training` - Get latest training config
+- `GET /api/training/:id` - Get specific training
+- `POST /api/training` - Save training config
+- `PUT /api/training/:id` - Update training config
+
+**LLM / AI**
+- `GET /api/llm/system-prompt` - Get current system prompt
+- `POST /api/llm/prompt` - Generate LLM prompt with training
+- `POST /api/llm/chat` - Send message to LLM with reasoning
 
 ## Environment Variables
 
@@ -180,38 +208,75 @@ npm start
 ```
 NEXT_PUBLIC_FIREBASE_API_KEY=
 NEXT_PUBLIC_FIREBASE_PROJECT_ID=
-SERPAPI_API_KEY=
-TWILIO_ACCOUNT_SID=
+NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN=
 ```
 
 ### Backend (`.env.local`)
 ```
-REDIS_URL=redis://localhost:6379
+# Firebase
 FIREBASE_PROJECT_ID=
+FIREBASE_PRIVATE_KEY=
+FIREBASE_CLIENT_EMAIL=
+
+# OpenRouter (FREE AI/LLM)
+OPENROUTER_API_KEY=
+
+# Services (Optional)
+SERPAPI_API_KEY=
 NODEMAILER_USER=
 NODEMAILER_PASS=
 TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+
+# Configuration
+PORT=5000
+NODE_ENV=development
+REDIS_URL=redis://localhost:6379
 ```
 
 ## Project Status
 
-- [x] Frontend scaffolding with Next.js
-- [x] Backend server setup
-- [x] Project structure organization
-- [ ] Firebase Firestore integration
+- [x] Frontend scaffolding with Next.js + TypeScript
+- [x] Backend server setup with Express.js
+- [x] Project structure (Frontend/Backend separation)
+- [x] Firebase Firestore integration and authentication
+- [x] Database collections (Companies, Leads, Messages, Training)
+- [x] Backend API routes (Companies, Leads, Messages, Training)
+- [x] Frontend UI structure (Navbar, Dashboard, Chats, Training, Project)
+- [x] Chat interface with customer list and multi-turn conversations
+- [x] Training configuration system (Bot name, instructions, knowledge, product, location)
+- [x] LLM Service with OpenRouter integration
+- [x] Free AI model with advanced reasoning capabilities
+- [x] Training-aware responses (LLM follows training instructions)
+- [ ] Refine chat interface and reasoning display
+- [ ] Email service integration
+- [ ] Web scraping service (Playwright)
 - [ ] Search service (SerpApi)
-- [ ] Scraping service (Playwright)
-- [ ] Email service
-- [ ] WhatsApp service
-- [ ] AI service (OpenClaw)
-- [ ] Task queue setup
-- [ ] Admin dashboard UI
-- [ ] Kanban board UI
+- [ ] WhatsApp service (Twilio)
+- [ ] Task queue background jobs (BullMQ)
+- [ ] Kanban board UI for lead management
+- [ ] Sentiment scoring and lead segmentation
 
 ## License
 
 MIT
 
+## OpenRouter LLM Integration
+
+The bot uses **free AI** via OpenRouter:
+
+- **Model**: `openai/gpt-oss-120b:free` (completely free)
+- **Features**: Advanced reasoning, multi-turn conversations
+- **Setup**: See [OPENROUTER_SETUP.md](OPENROUTER_SETUP.md) for detailed configuration
+
+### Quick Start
+1. Get free OpenRouter API key from [openrouter.ai](https://openrouter.ai)
+2. Add `OPENROUTER_API_KEY` to `backend/.env`
+3. Configure training at the **Training** page
+4. Start chatting! The AI will follow your training instructions
+
 ## Support
 
-For documentation and detailed instructions, see `.github/copilot-instructions.md`
+- **Setup Instructions**: See [.github/copilot-instructions.md](.github/copilot-instructions.md)
+- **OpenRouter Setup**: See [OPENROUTER_SETUP.md](OPENROUTER_SETUP.md)
+- **API Documentation**: See individual route handlers in `backend/server/routes/`

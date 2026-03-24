@@ -12,6 +12,8 @@ const { db } = require('./config/firebase');
 const companiesRouter = require('./routes/companies');
 const leadsRouter = require('./routes/leads');
 const messagesRouter = require('./routes/messages');
+const trainingRouter = require('./routes/training');
+const llmRouter = require('./routes/llm');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -29,6 +31,8 @@ app.get('/health', (req, res) => {
 app.use('/api/companies', companiesRouter);
 app.use('/api/leads', leadsRouter);
 app.use('/api/messages', messagesRouter);
+app.use('/api/training', trainingRouter);
+app.use('/api/llm', llmRouter);
 
 // API status endpoint
 app.get('/api/status', (req, res) => {

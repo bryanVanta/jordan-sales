@@ -5,7 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
-const { generateSystemPrompt, generateLLMPrompt, sendMessage, callOpenRouter } = require('../services/llmService');
+const { generateSystemPrompt, generateLLMPrompt, sendMessage, callOpenRouter, analyzeCustomerStatus } = require('../services/llmService');
 
 // Get system prompt (for debugging/testing)
 router.get('/system-prompt', async (req, res) => {
@@ -47,6 +47,22 @@ router.post('/chat', async (req, res) => {
 
     const response = await sendMessage(message, history || [], reasoning !== false);
     res.json({ success: true, data: response });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Analyze customer status from conversation history
+router.post('/analyze-status', async (req, res) => {
+  try {
+    const { history } = req.body;
+    
+    if (!history || !Array.isArray(history)) {
+      return res.status(400).json({ success: false, error: 'Conversation history array is required' });
+    }
+
+    const status = await analyzeCustomerStatus(history);
+    res.json({ success: true, data: status });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });
   }

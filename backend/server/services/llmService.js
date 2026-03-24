@@ -150,9 +150,99 @@ async function generateLLMPrompt(userMessage, context = {}) {
   }
 }
 
+/**
+ * Analyze customer sentiment and lead quality from conversation history
+ * Returns classification: HOT (close to closing), WARM (high potential), NEUTRAL (neither), COLD (no potential)
+ */
+async function analyzeCustomerStatus(conversationHistory = []) {
+  try {
+    if (!OPENROUTER_API_KEY) {
+      throw new Error('OPENROUTER_API_KEY not configured');
+    }
+
+    if (conversationHistory.length === 0) {
+      return {
+        status: 'NEUTRAL',
+        reasoning: 'Insufficient message history to analyze customer status',
+        confidence: 0.5,
+      };
+    }
+
+    // Build conversation summary for analysis
+    const conversationText = conversationHistory
+      .map((msg) => `${msg.role === 'user' ? 'CUSTOMER' : 'BOT'}: ${msg.content}`)
+      .join('\n');
+
+    const analysisPrompt = `Analyze this customer conversation and classify the lead quality into ONE of these categories:
+
+CATEGORIES:
+- HOT: Customer is very interested, asking specific questions, ready to buy/commit, showing urgency
+- WARM: Customer shows interest, engaging positively, open to learning more, potential buyer
+- NEUTRAL: Customer is polite but shows neither strong interest nor rejection, casual inquiries
+- COLD: Customer is uninterested, dismissive, negative, or clearly not a good fit
+
+CONVERSATION:
+${conversationText}
+
+Respond ONLY with valid JSON (no markdown, no code blocks):
+{
+  "status": "HOT|WARM|NEUTRAL|COLD",
+  "reasoning": "brief explanation of why this status was assigned",
+  "confidence": 0.0 to 1.0
+}`;
+
+    const response = await axios.post(
+      `${OPENROUTER_BASE_URL}/chat/completions`,
+      {
+        model: MODEL,
+        messages: [
+          {
+            role: 'user',
+            content: analysisPrompt,
+          },
+        ],
+        temperature: 0.3, // Lower temperature for more consistent analysis
+        max_tokens: 300,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    const analysisText = response.data.choices[0].message.content.trim();
+    
+    // Parse JSON response
+    let analysis = JSON.parse(analysisText);
+    
+    // Validate status
+    const validStatuses = ['HOT', 'WARM', 'NEUTRAL', 'COLD'];
+    if (!validStatuses.includes(analysis.status)) {
+      analysis.status = 'NEUTRAL';
+    }
+
+    return {
+      status: analysis.status,
+      reasoning: analysis.reasoning || 'Unable to determine reasoning',
+      confidence: Math.min(Math.max(analysis.confidence || 0.5, 0), 1), // Clamp between 0-1
+    };
+  } catch (error) {
+    console.error('Error analyzing customer status:', error);
+    // Return neutral status on error
+    return {
+      status: 'NEUTRAL',
+      reasoning: 'Error analyzing conversation',
+      confidence: 0,
+    };
+  }
+}
+
 module.exports = {
   generateSystemPrompt,
   generateLLMPrompt,
   sendMessage,
   callOpenRouter,
+  analyzeCustomerStatus,
 };

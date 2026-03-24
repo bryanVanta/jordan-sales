@@ -101,9 +101,27 @@ export async function chatWithLLM(
   }
 }
 
+/**
+ * Analyze customer status from conversation history
+ * Returns classification: HOT, WARM, NEUTRAL, or COLD
+ */
+export async function analyzeCustomerStatus(conversationHistory: any[] = []) {
+  try {
+    const response = await axios.post(`${API_BASE_URL}/llm/analyze-status`, {
+      history: conversationHistory,
+    });
+
+    return response.data.data;
+  } catch (error) {
+    console.error('Error analyzing customer status:', error);
+    throw error;
+  }
+}
+
 export default {
   getSystemPrompt,
   generateLLMPrompt,
   sendMessageToLLM,
   chatWithLLM,
+  analyzeCustomerStatus,
 };

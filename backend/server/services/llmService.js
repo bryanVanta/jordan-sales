@@ -4,21 +4,30 @@
  */
 
 const axios = require('axios');
-const { getLatestTraining } = require('./trainingService');
+const { getProduct, getAllProducts } = require('./productService');
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const MODEL = 'openai/gpt-oss-120b:free';
 
 /**
- * Generate system prompt from training configuration
+ * Generate system prompt from product configuration
  * This will be used to instruct the LLM how to behave
  */
-async function generateSystemPrompt() {
+async function generateSystemPrompt(productId = null) {
   try {
-    const training = await getLatestTraining();
+    let product;
     
-    if (!training) {
+    if (productId) {
+      // Get specific product
+      product = await getProduct(productId);
+    } else {
+      // Get first/latest product
+      const products = await getAllProducts();
+      product = products.length > 0 ? products[0] : null;
+    }
+    
+    if (!product) {
       return null;
     }
 
@@ -31,14 +40,19 @@ BEHAVIOR:
 - Focus on value and urgency
 
 INSTRUCTIONS:
-${training.instructions}
+${product.instructions}
 
 PRODUCT:
-${training.product}
+Name: ${product.productName || 'N/A'}
+Type: ${product.productType || 'N/A'}
+Description: ${product.description}
 
-LOCATION: ${training.location}
+TARGET CUSTOMER:
+${product.targetCustomer}
 
-${training.knowledge ? `KEY INFO:\n${training.knowledge}` : ''}
+LOCATION: ${product.location}
+
+${product.knowledge ? `KEY INFO:\n${product.knowledge}` : ''}
 
 Respond naturally without any markdown or special formatting.`;
 

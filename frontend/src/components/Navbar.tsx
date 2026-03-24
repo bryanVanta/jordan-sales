@@ -11,6 +11,9 @@ const Navbar = () => {
         <Link href="/dashboard" legacyBehavior>
           <a className="text-xl font-bold hover:underline mr-8">Jordan Sales</a>
         </Link>
+        <Link href="/training" legacyBehavior>
+          <a className="hover:underline mr-8">Training</a>
+        </Link>
         <div className="relative">
           <button
             onClick={() => setIsDropdownOpen(!isDropdownOpen)}

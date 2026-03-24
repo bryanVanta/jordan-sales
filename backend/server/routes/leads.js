@@ -1,31 +1,58 @@
 /**
- * Leads API Routes
+ * Leads Routes
+ * CRUD endpoints for leads
  */
+
 const express = require('express');
 const router = express.Router();
+const {
+  createLead,
+  getLead,
+  getLeadsByCompany,
+  updateLead,
+} = require('../services/firestoreService');
 
-// GET /api/leads - Get all leads
-router.get('/', (req, res) => {
-  // TODO: Implement get leads
-  res.json({ message: 'Get leads endpoint' });
+// Get leads by company
+router.get('/company/:companyId', async (req, res) => {
+  try {
+    const leads = await getLeadsByCompany(req.params.companyId);
+    res.json({ success: true, data: leads });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
-// GET /api/leads/:id - Get specific lead
-router.get('/:id', (req, res) => {
-  // TODO: Implement get lead by ID
-  res.json({ message: 'Get lead endpoint', id: req.params.id });
+// Get single lead
+router.get('/:id', async (req, res) => {
+  try {
+    const lead = await getLead(req.params.id);
+    if (!lead) {
+      return res.status(404).json({ success: false, error: 'Lead not found' });
+    }
+    res.json({ success: true, data: lead });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
-// POST /api/leads - Create new lead
-router.post('/', (req, res) => {
-  // TODO: Implement create lead
-  res.json({ message: 'Create lead endpoint' });
+// Create lead
+router.post('/', async (req, res) => {
+  try {
+    const lead = await createLead(req.body);
+    res.status(201).json({ success: true, data: lead });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
-// PATCH /api/leads/:id - Update lead
-router.patch('/:id', (req, res) => {
-  // TODO: Implement update lead
-  res.json({ message: 'Update lead endpoint', id: req.params.id });
+// Update lead
+router.put('/:id', async (req, res) => {
+  try {
+    const lead = await updateLead(req.params.id, req.body);
+    res.json({ success: true, data: lead });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 module.exports = router;

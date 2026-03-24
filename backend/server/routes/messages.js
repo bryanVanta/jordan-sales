@@ -1,25 +1,33 @@
 /**
- * Messages API Routes
+ * Messages Routes
+ * CRUD endpoints for messages
  */
+
 const express = require('express');
 const router = express.Router();
+const {
+  createMessage,
+  getMessagesByLead,
+} = require('../services/firestoreService');
 
-// GET /api/messages - Get all messages
-router.get('/', (req, res) => {
-  // TODO: Implement get messages
-  res.json({ message: 'Get messages endpoint' });
+// Get messages by lead
+router.get('/:leadId', async (req, res) => {
+  try {
+    const messages = await getMessagesByLead(req.params.leadId);
+    res.json({ success: true, data: messages });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
-// POST /api/messages/send - Send message (email/WhatsApp)
-router.post('/send', (req, res) => {
-  // TODO: Implement send message
-  res.json({ message: 'Send message endpoint' });
-});
-
-// POST /api/messages/reply - Reply to message
-router.post('/reply', (req, res) => {
-  // TODO: Implement reply to message
-  res.json({ message: 'Reply to message endpoint' });
+// Create message
+router.post('/', async (req, res) => {
+  try {
+    const message = await createMessage(req.body);
+    res.status(201).json({ success: true, data: message });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
 });
 
 module.exports = router;

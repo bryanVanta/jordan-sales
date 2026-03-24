@@ -4,12 +4,12 @@ import { getFirestore } from 'firebase/firestore';
 import { getAuth } from 'firebase/auth';
 
 const firebaseConfig = {
-  apiKey: process.env.NEXT_PUBLIC_FIREBASE_API_KEY,
-  authDomain: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID,
-  storageBucket: process.env.NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.NEXT_PUBLIC_FIREBASE_APP_ID,
+  apiKey: "AIzaSyC6fRe8-dblmTG7cXkSgl7-OvGDgbYY3HQ",
+  authDomain: "jordan-761bf.firebaseapp.com",
+  projectId: "jordan-761bf",
+  storageBucket: "jordan-761bf.firebasestorage.app",
+  messagingSenderId: "903231595732",
+  appId: "1:903231595732:web:d1ccf3e88ae430e2a84741",
 };
 
 const app = initializeApp(firebaseConfig);

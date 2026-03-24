@@ -7,6 +7,12 @@ const express = require('express');
 const cors = require('cors');
 require('dotenv').config();
 
+// Import Firebase and routes
+const { db } = require('./config/firebase');
+const companiesRouter = require('./routes/companies');
+const leadsRouter = require('./routes/leads');
+const messagesRouter = require('./routes/messages');
+
 const app = express();
 const PORT = process.env.PORT || 5000;
 
@@ -19,7 +25,12 @@ app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'salesbot-backend' });
 });
 
-// API Routes placeholder
+// API Routes
+app.use('/api/companies', companiesRouter);
+app.use('/api/leads', leadsRouter);
+app.use('/api/messages', messagesRouter);
+
+// API status endpoint
 app.get('/api/status', (req, res) => {
   res.json({
     status: 'running',
@@ -37,6 +48,7 @@ app.get('/api/status', (req, res) => {
 app.listen(PORT, () => {
   console.log(`🚀 Salesbot Backend running on http://localhost:${PORT}`);
   console.log(`📋 Health check: http://localhost:${PORT}/health`);
+  console.log(`🗄️  Firestore connected to project: ${process.env.FIREBASE_PROJECT_ID}`);
 });
 
 module.exports = app;

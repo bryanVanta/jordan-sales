@@ -1,17 +1,23 @@
 "use client";
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import { ChevronDown, ChevronRight, Plus, User } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname } from 'next/navigation';
+import { usePathname, useSearchParams } from 'next/navigation';
 
-const Navbar = () => {
+const NavbarContent = () => {
   const [showProfilePopup, setShowProfilePopup] = useState(false);
   const pathname = usePathname();
+  const searchParams = useSearchParams();
 
   const getPageTitle = () => {
     if (pathname === '/') return 'Dashboard';
     if (pathname === '/leads') return 'Projects';
-    if (pathname.includes('/chats')) return 'Chat';
+    if (pathname.includes('/chats')) {
+      const platform = searchParams.get('platform');
+      if (platform === 'telegram') return 'Telegram';
+      if (platform === 'email') return 'Email';
+      return 'WhatsApp';
+    }
     if (pathname.includes('/training')) return 'Training';
     return 'Dashboard';
   };
@@ -102,5 +108,11 @@ const Navbar = () => {
     </nav>
   );
 };
+
+const Navbar = () => (
+  <Suspense fallback={null}>
+    <NavbarContent />
+  </Suspense>
+);
 
 export default Navbar;

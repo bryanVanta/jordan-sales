@@ -25,12 +25,21 @@ interface Message {
   time: string;
 }
 
+interface MediaItem {
+  label: string;
+  count: string;
+  icon: any;
+  border: string;
+  bg: string;
+  text: string;
+}
+
 interface CustomerData {
   id: number;
   name: string;
   time: string;
   messages: Message[];
-  media: { label: string, count: string, icon: any, border: string, bg: string, text: string }[];
+  media: { label: string, count: string }[];
   progress: string[];
   temperature: number; // 0 to 100
 }
@@ -47,8 +56,8 @@ const CUSTOMERS: CustomerData[] = [
       { id: "s4", sender: "bot", text: "Perfect. We offer a central cloud dashboard for all sites.", time: "10:22 AM" },
     ],
     media: [
-      { label: 'Documents', count: '12 files, 45mb', icon: <FileText size={16} />, border: 'border-purple-100', bg: 'bg-purple-50', text: 'text-purple-600' },
-      { label: 'Photos', count: '5 files, 12mb', icon: <ImageIcon size={16} />, border: 'border-orange-100', bg: 'bg-orange-50', text: 'text-orange-600' },
+      { label: 'Documents', count: '12 files, 45mb' },
+      { label: 'Photos', count: '5 files, 12mb' },
     ],
     progress: ["Send introductory email", "Schedule demo call", "Review pricing structure"],
     temperature: 65,
@@ -61,7 +70,7 @@ const CUSTOMERS: CustomerData[] = [
       { id: "d1", sender: "user", text: "Can you send the pricing for 50 seats?", time: "10:02 AM" },
     ],
     media: [
-      { label: 'Documents', count: '2 files, 5mb', icon: <FileText size={16} />, border: 'border-purple-100', bg: 'bg-purple-50', text: 'text-purple-600' },
+      { label: 'Documents', count: '2 files, 5mb' },
     ],
     progress: ["Confirm user count", "Generate custom quote"],
     temperature: 45,
@@ -85,11 +94,18 @@ const CUSTOMERS: CustomerData[] = [
       { id: "m1", sender: "user", text: "How do I integrate API with our CRM?", time: "2:15 PM" },
     ],
     media: [
-      { label: 'Documents', count: '8 files, 20mb', icon: <FileText size={16} />, border: 'border-purple-100', bg: 'bg-purple-50', text: 'text-purple-600' },
+      { label: 'Documents', count: '8 files, 20mb' },
+      { label: 'Other', count: '1 file, 2mb' },
     ],
     progress: ["Share API docs", "Assist with sandbox setup"],
     temperature: 85,
   },
+];
+
+const DEFAULT_MEDIA: MediaItem[] = [
+  { label: 'Documents', count: '0 files, 0mb', icon: <FileText size={16} />, border: 'border-purple-100', bg: 'bg-purple-50', text: 'text-purple-600' },
+  { label: 'Photos', count: '0 files, 0mb', icon: <ImageIcon size={16} />, border: 'border-orange-100', bg: 'bg-orange-50', text: 'text-orange-600' },
+  { label: 'Other', count: '0 files, 0mb', icon: <Info size={16} />, border: 'border-cyan-100', bg: 'bg-cyan-50', text: 'text-cyan-600' }
 ];
 
 const ChatInterface = () => {
@@ -129,6 +145,13 @@ const ChatInterface = () => {
     
     setMessages([...messages, newMsg]);
     setInputValue("");
+  };
+
+  const getMediaData = () => {
+    return DEFAULT_MEDIA.map(def => {
+      const match = currentCustomer.media.find(m => m.label === def.label);
+      return match ? { ...def, count: match.count } : def;
+    });
   };
 
   const StatusCard = ({ label, count, colorClass, icon }: any) => (
@@ -289,9 +312,9 @@ const ChatInterface = () => {
                 <h3 className="text-lg font-black text-gray-900 tracking-tight">{currentCustomer.name}</h3>
               </div>
 
-              {/* Media Sections Sync */}
+              {/* Media Sections: Always SHOW ALL */}
               <div className="space-y-2 mb-6">
-                {currentCustomer.media.length > 0 ? currentCustomer.media.map((media) => (
+                {getMediaData().map((media) => (
                   <div key={media.label} className="flex items-center justify-between p-3 rounded-xl bg-white border border-gray-50 group cursor-pointer hover:border-blue-200 transition-all shadow-sm">
                     <div className="flex items-center gap-3">
                       <div className={`p-2 rounded-lg border ${media.border} ${media.bg} ${media.text}`}>{media.icon}</div>
@@ -302,11 +325,7 @@ const ChatInterface = () => {
                     </div>
                     <ChevronRight size={12} className="text-gray-300 group-hover:text-blue-600" />
                   </div>
-                )) : (
-                  <div className="text-center p-4 bg-gray-50 rounded-xl border border-dashed border-gray-200">
-                    <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">No Media Found</p>
-                  </div>
-                )}
+                ))}
               </div>
 
               {/* Temperature Progress Sync */}

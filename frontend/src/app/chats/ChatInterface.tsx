@@ -14,7 +14,8 @@ import {
   Snowflake,
   ShieldCheck,
   ChevronRight,
-  Plus
+  Plus,
+  MessageSquare
 } from "lucide-react";
 
 interface Message {
@@ -50,9 +51,9 @@ const INITIAL_MESSAGES: Message[] = [
   { id: "4", sender: "bot", text: "Great. For 450 users, our enterprise plan offers the best value with a dedicated account manager and 24/7 support.", timestamp: "10:22 AM", status: "read" },
 ];
 
-export default function ChatsPage() {
-  const [selectedCustomer, setSelectedCustomer] = useState<Customer>(INITIAL_CUSTOMERS[0]);
-  const [messages, setMessages] = useState<Message[]>(INITIAL_MESSAGES);
+export default function ChatInterface() {
+  const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -62,16 +63,22 @@ export default function ChatsPage() {
   };
 
   useEffect(() => {
+    if (selectedCustomer) {
+      setMessages(INITIAL_MESSAGES); // Simulate loading history
+    }
+  }, [selectedCustomer]);
+
+  useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
   const handleSendMessage = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputValue.trim()) return;
+    if (!inputValue.trim() || !selectedCustomer) return;
 
     const newMessage: Message = {
       id: Date.now().toString(),
-      sender: "bot", // Jordan acts as the bot
+      sender: "bot", 
       text: inputValue,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       status: "sent"
@@ -124,30 +131,30 @@ export default function ChatsPage() {
                 key={customer.id}
                 onClick={() => setSelectedCustomer(customer)}
                 className={`w-full flex items-center gap-4 p-4 rounded-2xl transition-all border group ${
-                  selectedCustomer.id === customer.id 
+                  selectedCustomer?.id === customer.id 
                     ? "bg-blue-600 border-blue-600 shadow-[0_10px_20px_rgba(37,99,235,0.2)]" 
                     : "bg-white/40 border-transparent hover:border-gray-100 hover:bg-white/80"
                 }`}
               >
                 <div className={`w-12 h-12 rounded-xl flex items-center justify-center font-black transition-colors ${
-                   selectedCustomer.id === customer.id ? "bg-white/20 text-white" : "bg-gray-100 text-gray-400 group-hover:bg-blue-50 group-hover:text-blue-600"
+                   selectedCustomer?.id === customer.id ? "bg-white/20 text-white" : "bg-gray-100 text-gray-400 group-hover:bg-blue-50 group-hover:text-blue-600"
                 }`}>
                   {customer.name.substring(0, 1)}
                 </div>
                 <div className="flex-1 text-left min-w-0">
                   <div className="flex items-center justify-between mb-1">
-                    <span className={`text-[14px] font-black truncate tracking-tight ${selectedCustomer.id === customer.id ? "text-white" : "text-gray-900"}`}>
+                    <span className={`text-[14px] font-black truncate tracking-tight ${selectedCustomer?.id === customer.id ? "text-white" : "text-gray-900"}`}>
                       {customer.name}
                     </span>
-                    <span className={`text-[10px] font-bold ${selectedCustomer.id === customer.id ? "text-white/60" : "text-gray-400"}`}>
+                    <span className={`text-[10px] font-bold ${selectedCustomer?.id === customer.id ? "text-white/60" : "text-gray-400"}`}>
                       {customer.lastActive}
                     </span>
                   </div>
-                  <p className={`text-[12px] font-medium truncate ${selectedCustomer.id === customer.id ? "text-white/80" : "text-gray-500"}`}>
+                  <p className={`text-[12px] font-medium truncate ${selectedCustomer?.id === customer.id ? "text-white/80" : "text-gray-500"}`}>
                     {customer.lastMessage}
                   </p>
                 </div>
-                {selectedCustomer.id !== customer.id && (
+                {selectedCustomer?.id !== customer.id && (
                   <div className="p-1.5 bg-gray-50 rounded-lg group-hover:bg-white transition-colors">
                     {getStatusIcon(customer.status)}
                   </div>
@@ -161,83 +168,80 @@ export default function ChatsPage() {
         {/* ================= CHAT MAIN AREA ================= */}
         <div className="flex-1 flex flex-col bg-white/70 backdrop-blur-2xl rounded-[32px] border border-white shadow-[0_20px_50px_rgba(0,0,0,0.04)] overflow-hidden animate-in slide-in-from-right-4 duration-500">
           
-          {/* Chat Header */}
-          <div className="px-8 py-5 border-b border-gray-50 flex items-center justify-between bg-white/30">
-            <div className="flex items-center gap-4">
-              <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600 font-black text-xl border border-blue-100">
-                {selectedCustomer.name.substring(0, 1)}
-              </div>
-              <div className="flex flex-col">
+          {selectedCustomer ? (
+            <>
+              {/* Chat Header */}
+              <div className="px-8 py-5 border-b border-gray-50 flex items-center justify-between bg-white/30">
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 bg-blue-50 rounded-2xl flex items-center justify-center text-blue-600 font-black text-xl border border-blue-100">
+                    {selectedCustomer.name.substring(0, 1)}
+                  </div>
+                  <div className="flex flex-col">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-[16px] font-black text-gray-900 tracking-tight">{selectedCustomer.name}</h3>
+                      <div className="flex items-center gap-1.5 bg-gray-50 px-2 py-0.5 rounded-full border border-gray-100">
+                        {getStatusIcon(selectedCustomer.status)}
+                        <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">{selectedCustomer.status}</span>
+                      </div>
+                    </div>
+                    <span className="text-[12px] font-bold text-gray-400">{selectedCustomer.phone}</span>
+                  </div>
+                </div>
                 <div className="flex items-center gap-2">
-                  <h3 className="text-[16px] font-black text-gray-900 tracking-tight">{selectedCustomer.name}</h3>
-                  <div className="flex items-center gap-1.5 bg-gray-50 px-2 py-0.5 rounded-full border border-gray-100">
-                    {getStatusIcon(selectedCustomer.status)}
-                    <span className="text-[9px] font-bold text-gray-500 uppercase tracking-widest">{selectedCustomer.status}</span>
-                  </div>
-                </div>
-                <span className="text-[12px] font-bold text-gray-400">{selectedCustomer.phone}</span>
-              </div>
-            </div>
-            
-            <div className="flex items-center gap-2">
-              <button className="p-3 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"><Phone size={20} /></button>
-              <button className="p-3 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"><Video size={20} /></button>
-              <div className="w-px h-6 bg-gray-100 mx-2" />
-              <button className="p-3 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-all"><MoreVertical size={20} /></button>
-            </div>
-          </div>
-
-          {/* Messages Area */}
-          <div className="flex-1 overflow-y-auto p-8 space-y-6 custom-scrollbar bg-gray-50/10">
-            <div className="flex justify-center">
-              <span className="text-[10px] font-black text-gray-300 uppercase tracking-[0.2em] bg-white px-4 py-1.5 rounded-full border border-gray-50 shadow-sm">
-                Today, 24 March
-              </span>
-            </div>
-            
-            {messages.map((msg, i) => (
-              <div key={msg.id} className={`flex ${msg.sender === 'bot' ? 'justify-end' : 'justify-start'} animate-in fade-in duration-300`}>
-                <div className={`flex flex-col max-w-[70%] ${msg.sender === 'bot' ? 'items-end' : 'items-start'}`}>
-                  <div className={`px-5 py-3.5 rounded-[22px] text-[14px] font-bold leading-relaxed shadow-sm ${
-                    msg.sender === 'bot' 
-                      ? "bg-blue-600 text-white rounded-br-none" 
-                      : "bg-white border border-gray-100 text-gray-800 rounded-bl-none"
-                  }`}>
-                    {msg.text}
-                  </div>
-                  <div className="flex items-center gap-1.5 mt-2 px-1">
-                    <span className="text-[10px] font-bold text-gray-400 opacity-60 uppercase">{msg.timestamp}</span>
-                    {msg.sender === 'bot' && <CheckCheck size={12} className="text-blue-500" />}
-                  </div>
+                  <button className="p-3 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"><Phone size={20} /></button>
+                  <button className="p-3 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded-xl transition-all"><Video size={20} /></button>
+                  <div className="w-px h-6 bg-gray-100 mx-2" />
+                  <button className="p-3 text-gray-400 hover:text-gray-900 hover:bg-gray-100 rounded-xl transition-all"><MoreVertical size={20} /></button>
                 </div>
               </div>
-            ))}
-            <div ref={messagesEndRef} />
-          </div>
 
-          {/* Chat Input */}
-          <form onSubmit={handleSendMessage} className="p-6 bg-white/50 backdrop-blur-md border-t border-gray-50">
-            <div className="relative flex items-center gap-3">
-              <div className="flex-1 relative">
-                <input 
-                  type="text"
-                  placeholder="Ask distance to Sarah..."
-                  className="w-full bg-white border border-gray-100 rounded-[22px] py-4 pl-6 pr-14 text-[14px] font-bold text-gray-800 focus:ring-4 focus:ring-blue-100 outline-none transition-all placeholder:text-gray-300 shadow-sm"
-                  value={inputValue}
-                  onChange={(e) => setInputValue(e.target.value)}
-                />
-                <button 
-                  type="submit"
-                  className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center hover:bg-black transition-all shadow-lg active:scale-90"
-                >
-                  <Send size={18} />
-                </button>
+              {/* Messages Area */}
+              <div className="flex-1 overflow-y-auto p-8 space-y-6 custom-scrollbar bg-gray-50/10">
+                <div className="flex justify-center">
+                  <span className="text-[10px] font-black text-gray-300 uppercase tracking-[0.2em] bg-white px-4 py-1.5 rounded-full border border-gray-50 shadow-sm">
+                    Today, 24 March
+                  </span>
+                </div>
+                {messages.map((msg, i) => (
+                  <div key={msg.id} className={`flex ${msg.sender === 'bot' ? 'justify-end' : 'justify-start'} animate-in fade-in duration-300`}>
+                    <div className={`flex flex-col max-w-[70%] ${msg.sender === 'bot' ? 'items-end' : 'items-start'}`}>
+                      <div className={`px-5 py-3.5 rounded-[22px] text-[14px] font-bold leading-relaxed shadow-sm ${
+                        msg.sender === 'bot' ? "bg-blue-600 text-white rounded-br-none" : "bg-white border border-gray-100 text-gray-800 rounded-bl-none"
+                      }`}>
+                        {msg.text}
+                      </div>
+                      <div className="flex items-center gap-1.5 mt-2 px-1">
+                        <span className="text-[10px] font-bold text-gray-400 opacity-60 uppercase">{msg.timestamp}</span>
+                        {msg.sender === 'bot' && <CheckCheck size={12} className="text-blue-500" />}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+                <div ref={messagesEndRef} />
               </div>
-              <button type="button" className="p-4 bg-white border border-gray-100 rounded-[22px] text-gray-400 hover:text-blue-600 hover:border-blue-100 transition-all shadow-sm">
-                <Zap size={22} />
-              </button>
+
+              {/* Chat Input */}
+              <form onSubmit={handleSendMessage} className="p-6 bg-white/50 backdrop-blur-md border-t border-gray-50">
+                <div className="relative flex items-center gap-3">
+                  <div className="flex-1 relative">
+                    <input type="text" placeholder={`Reply to ${selectedCustomer.name}...`} className="w-full bg-white border border-gray-100 rounded-[22px] py-4 pl-6 pr-14 text-[14px] font-bold text-gray-800 focus:ring-4 focus:ring-blue-100 outline-none transition-all placeholder:text-gray-300 shadow-sm" value={inputValue} onChange={(e) => setInputValue(e.target.value)} />
+                    <button type="submit" className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 bg-blue-600 text-white rounded-full flex items-center justify-center hover:bg-black transition-all shadow-lg active:scale-90"><Send size={18} /></button>
+                  </div>
+                  <button type="button" className="p-4 bg-white border border-gray-100 rounded-[22px] text-gray-400 hover:text-blue-600 hover:border-blue-100 transition-all shadow-sm"><Zap size={22} /></button>
+                </div>
+              </form>
+            </>
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center text-center p-20 animate-in fade-in zoom-in duration-500">
+               <div className="w-24 h-24 bg-blue-50 rounded-[32px] flex items-center justify-center text-blue-300 border border-blue-50 mb-6">
+                 <MessageSquare size={44} />
+               </div>
+               <h3 className="text-xl font-black text-gray-900 tracking-tight mb-2">Select a Conversation</h3>
+               <p className="text-[14px] font-bold text-gray-400 max-w-[280px] leading-relaxed">
+                 Choose a customer from the sidebar to view their lead status and start communicating.
+               </p>
             </div>
-          </form>
+          )}
         </div>
 
       </div>

@@ -2,9 +2,19 @@
 import React, { useState } from 'react';
 import { ChevronDown, ChevronRight, Plus, User } from 'lucide-react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 
 const Navbar = () => {
   const [showProfilePopup, setShowProfilePopup] = useState(false);
+  const pathname = usePathname();
+
+  const getPageTitle = () => {
+    if (pathname === '/') return 'Dashboard';
+    if (pathname === '/leads') return 'Projects';
+    if (pathname.includes('/chats')) return 'Chat';
+    if (pathname.includes('/training')) return 'Training';
+    return 'Dashboard';
+  };
 
   const projects = [
     { name: 'Hotel Management Project', id: 1 },
@@ -12,14 +22,16 @@ const Navbar = () => {
   ];
 
   return (
-    <nav className="flex items-center justify-between px-8 py-5 w-full max-w-[1440px] mx-auto bg-transparent z-[100] relative">
+    <nav className="flex items-center justify-between px-8 py-5 w-full max-w-[1600px] mx-auto bg-transparent z-[100] relative">
       <div className="flex-1 flex items-center">
         <span className="text-xl font-bold tracking-tight text-white border-b-2 border-transparent pb-1">Jordan</span>
       </div>
       
       <div className="flex-1 flex items-center justify-center">
         <Link href="/">
-          <span className="text-[1.1rem] font-medium text-white tracking-wide font-sans cursor-pointer hover:text-gray-200">Dashboard</span>
+          <span className="text-[1.1rem] font-medium text-white tracking-wide font-sans cursor-pointer hover:text-gray-200">
+            {getPageTitle()}
+          </span>
         </Link>
       </div>
       

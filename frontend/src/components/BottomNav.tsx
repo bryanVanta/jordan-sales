@@ -10,7 +10,7 @@ const BottomNav = () => {
   const navItems = [
     { name: 'Dashboard', icon: LayoutDashboard, href: '/', bg: 'bg-[#E1DDFF]', iconCol: 'text-[#5035E4]' },
     { name: 'Chat', icon: MessageCircle, href: '/chats', bg: 'bg-[#FAD5E4]', iconCol: 'text-[#D31C63]' },
-    { name: 'Customer', icon: Users, href: '/project', bg: 'bg-[#FEF1CE]', iconCol: 'text-[#C79100]' },
+    { name: 'Leads', icon: Users, href: '/leads', bg: 'bg-[#FEF1CE]', iconCol: 'text-[#C79100]' },
     { name: 'Train', icon: GraduationCap, href: '/training', bg: 'bg-[#D6FBE0]', iconCol: 'text-[#1B893A]' },
   ];
 

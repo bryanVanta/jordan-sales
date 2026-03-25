@@ -75,7 +75,7 @@ const ChatInterface = () => {
   );
 
   return (
-    <div className="absolute inset-0 flex p-4 gap-3 overflow-hidden pb-[100px] h-full">
+    <div className="absolute inset-0 flex p-4 gap-3 overflow-hidden pb-[20px] h-full">
       <div className="absolute inset-0 bg-blue-500/[0.02] pointer-events-none -z-10"></div>
       
       {/* ================= LEFT COLUMN: Customer Selection ================= */}
@@ -101,7 +101,7 @@ const ChatInterface = () => {
           </div>
 
           {/* Customer List - Tightened Padding */}
-          <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar space-y-1.5 pb-20">
+          <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar space-y-1.5 pb-28">
             {[
               { id: 1, name: "Sarah Jenkins", text: "Cloud-based would be better...", time: "10:15 AM" },
               { id: 2, name: "David Chen", text: "Can you send the pricing?", time: "10:02 AM" },
@@ -171,8 +171,8 @@ const ChatInterface = () => {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Shrinked Action Input Bar */}
-        <div className="p-6 mt-auto border-t border-gray-50/50 bg-white/50">
+        {/* Shrinked Action Input Bar - Raised above navbar */}
+        <div className="p-6 pb-[100px] mt-auto border-t border-gray-50/50 bg-white/50">
           <div className="bg-white border border-gray-100 rounded-[24px] p-2.5 shadow-sm flex items-center gap-3 transition-all relative">
             <div className="relative">
               <button 

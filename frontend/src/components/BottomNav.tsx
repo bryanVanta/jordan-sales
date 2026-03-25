@@ -25,12 +25,12 @@ const BottomNavContent = () => {
 
   return (
     <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-50">
-      <div className="bg-[#0f0f0f]/90 backdrop-blur-md px-6 py-4 rounded-[40px] shadow-[0_20px_50px_rgba(0,0,0,0.4)] flex items-center gap-8 border border-white/5 transition-all duration-500">
+      <div className="bg-[#0f0f0f]/90 backdrop-blur-md px-4 py-3 rounded-[40px] shadow-[0_20px_50px_rgba(0,0,0,0.4)] flex items-center gap-4 border border-white/5 transition-all duration-500">
         
         {/* Dashboard Link */}
         <Link href="/" className="relative flex flex-col items-center justify-center group">
-          <div className={`p-2.5 rounded-full transition-all duration-500 flex items-center justify-center w-[44px] h-[44px] ${regularItems[0].bg} ${pathname === '/' ? 'shadow-[0_0_20px_rgba(255,255,255,0.2)] scale-105' : 'opacity-80 group-hover:opacity-100 group-hover:scale-105 group-hover:-translate-y-1'}`}>
-            <LayoutDashboard size={20} strokeWidth={pathname === '/' ? 2.5 : 2} className={regularItems[0].iconCol} />
+          <div className={`p-2.5 rounded-full transition-all duration-500 flex items-center justify-center w-[40px] h-[40px] ${regularItems[0].bg} ${pathname === '/' ? 'shadow-[0_0_20px_rgba(255,255,255,0.2)] scale-105' : 'opacity-80 group-hover:opacity-100 group-hover:scale-105 group-hover:-translate-y-1'}`}>
+            <LayoutDashboard size={18} strokeWidth={pathname === '/' ? 2.5 : 2} className={regularItems[0].iconCol} />
           </div>
           <div className="absolute -top-12 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-white text-black text-[11px] font-black rounded-xl opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300 pointer-events-none shadow-xl border border-gray-100 flex items-center gap-1.5 whitespace-nowrap z-[60]">
             Dashboard
@@ -40,14 +40,14 @@ const BottomNavContent = () => {
         </Link>
 
         {/* Chat Platform Group */}
-        <div className={`flex items-center gap-3 p-1.5 rounded-[32px] transition-all duration-500 ${isChatActive ? 'bg-white/5 shadow-inner' : ''}`}>
+        <div className={`flex items-center gap-2 p-1 rounded-[32px] transition-all duration-500 ${isChatActive ? 'bg-white/5 shadow-inner' : ''}`}>
            {chatSubItems.map((item) => {
              const isActive = isChatActive && platform === item.id;
              const Icon = item.icon;
              return (
                <Link key={item.id} href={item.href} className="relative flex flex-col items-center justify-center group">
-                  <div className={`p-2.5 rounded-full transition-all duration-500 flex items-center justify-center w-[44px] h-[44px] ${item.bg} ${isActive ? 'shadow-[0_0_20px_rgba(255,255,255,0.2)] scale-105' : 'opacity-40 grayscale group-hover:opacity-100 group-hover:grayscale-0 group-hover:scale-110'}`}>
-                    <Icon size={20} strokeWidth={isActive ? 2.5 : 2} className={item.iconCol} />
+                  <div className={`p-2 rounded-full transition-all duration-500 flex items-center justify-center w-[40px] h-[40px] ${item.bg} ${isActive ? 'shadow-[0_0_20px_rgba(255,255,255,0.2)] scale-105' : 'opacity-40 grayscale group-hover:opacity-100 group-hover:grayscale-0 group-hover:scale-110'}`}>
+                    <Icon size={18} strokeWidth={isActive ? 2.5 : 2} className={item.iconCol} />
                   </div>
                   <div className="absolute -top-12 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-white text-black text-[11px] font-black rounded-xl opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300 pointer-events-none shadow-xl border border-gray-100 flex items-center gap-1.5 whitespace-nowrap z-[60]">
                     {item.name}
@@ -65,8 +65,8 @@ const BottomNavContent = () => {
           const Icon = item.icon;
           return (
             <Link key={item.name} href={item.href} className="relative flex flex-col items-center justify-center group">
-              <div className={`p-2.5 rounded-full transition-all duration-500 flex items-center justify-center w-[44px] h-[44px] ${item.bg} ${isActive ? 'shadow-[0_0_20px_rgba(255,255,255,0.2)] scale-105' : 'opacity-80 group-hover:opacity-100 group-hover:scale-105 group-hover:-translate-y-1'}`}>
-                <Icon size={20} strokeWidth={isActive ? 2.5 : 2} className={item.iconCol} />
+              <div className={`p-2.5 rounded-full transition-all duration-500 flex items-center justify-center w-[40px] h-[40px] ${item.bg} ${isActive ? 'shadow-[0_0_20px_rgba(255,255,255,0.2)] scale-105' : 'opacity-80 group-hover:opacity-100 group-hover:scale-105 group-hover:-translate-y-1'}`}>
+                <Icon size={18} strokeWidth={isActive ? 2.5 : 2} className={item.iconCol} />
               </div>
               <div className="absolute -top-12 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-white text-black text-[11px] font-black rounded-xl opacity-0 translate-y-2 group-hover:opacity-100 group-hover:translate-y-0 transition-all duration-300 pointer-events-none shadow-xl border border-gray-100 flex items-center gap-1.5 whitespace-nowrap z-[60]">
                 {item.name}

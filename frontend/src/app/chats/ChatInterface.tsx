@@ -7,10 +7,12 @@ import {
   Send, 
   Mic, 
   ChevronRight, 
+  TrendingUp,
+  Sun,
+  Cloud,
+  CheckCircle2,
   Flame,
-  Zap,
   Snowflake,
-  ShieldCheck,
   FileText,
   Image as ImageIcon,
   Info,
@@ -113,16 +115,17 @@ const ChatInterface = () => {
   const [showContactInfo, setShowContactInfo] = useState(true);
   const [inputValue, setInputValue] = useState("");
   const [showPlusMenu, setShowPlusMenu] = useState(false);
+  const [allCustomers, setAllCustomers] = useState<CustomerData[]>(CUSTOMERS);
   
-  const currentCustomer = CUSTOMERS.find(c => c.id === selectedCustomerId) || CUSTOMERS[0];
-  const [messages, setMessages] = useState<Message[]>(currentCustomer.messages);
+  const currentCustomer = allCustomers.find(c => c.id === selectedCustomerId) || allCustomers[0];
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const docInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    setMessages(currentCustomer.messages);
     setShowPlusMenu(false);
-  }, [selectedCustomerId, currentCustomer]);
+  }, [selectedCustomerId]);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -130,20 +133,18 @@ const ChatInterface = () => {
 
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [currentCustomer.messages]);
 
   const handleSendMessage = (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!inputValue.trim()) return;
     
-    const newMsg: Message = {
-      id: Date.now().toString(),
-      sender: "bot",
-      text: inputValue,
-      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    };
-    
-    setMessages([...messages, newMsg]);
+    const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    setAllCustomers(prev => prev.map(c => 
+      c.id === selectedCustomerId 
+        ? { ...c, messages: [...c.messages, { id: Date.now().toString(), sender: "bot", text: inputValue, time }] } 
+        : c
+    ));
     setInputValue("");
   };
 
@@ -154,13 +155,18 @@ const ChatInterface = () => {
     });
   };
 
-  const StatusCard = ({ label, count, colorClass, icon }: any) => (
-    <div className={`flex flex-col p-3 rounded-2xl border ${colorClass} shadow-sm flex-1`}>
-      <div className="flex items-center justify-between mb-1.5">
-        <span className="text-[9px] font-black uppercase tracking-widest opacity-80">{label}</span>
-        {icon}
+  const StatusCard = ({ label, count, bg, text, border, icon: Icon, trend }: any) => (
+    <div className={`${bg} p-3.5 rounded-[22px] flex flex-col border ${border} justify-center group hover:brightness-95 transition-all relative overflow-hidden h-[100px] flex-1`}>
+      <Icon size={48} strokeWidth={1} className={`absolute -right-2 -bottom-2 ${text} opacity-20`} />
+      <div className="flex items-center gap-2 mb-1.5 z-10">
+        <span className={`${text} font-bold text-[11px]`}>{label}</span>
+        <div className={`bg-white/60 ${text} px-1.5 py-0.5 rounded-full text-[9px] font-bold flex items-center gap-0.5 shadow-sm border border-white/50`}>
+           <TrendingUp size={10} strokeWidth={3} /> {trend}
+        </div>
       </div>
-      <span className="text-xl font-black">{count}</span>
+      <div className={`flex items-end gap-1 ${text} z-10`}>
+        <span className="text-3xl font-black tracking-tighter">{count}</span>
+      </div>
     </div>
   );
 
@@ -172,11 +178,11 @@ const ChatInterface = () => {
       <div className="w-[360px] flex flex-col h-full animate-in slide-in-from-left-4 duration-500">
         <div className="bg-white/90 backdrop-blur-2xl rounded-[32px] border border-white p-4 shadow-xl flex flex-col h-full overflow-hidden">
           
-          <div className="grid grid-cols-2 gap-2 mb-4">
-            <StatusCard label="Hot" count="10" colorClass="border-red-200 bg-red-100 text-red-600" icon={<Flame size={14} className="text-red-500" />} />
-            <StatusCard label="Warm" count="13" colorClass="border-orange-200 bg-orange-100 text-orange-600" icon={<Zap size={14} className="text-orange-500" />} />
-            <StatusCard label="Cold" count="8" colorClass="border-blue-200 bg-blue-100 text-blue-600" icon={<Snowflake size={14} className="text-blue-500" />} />
-            <StatusCard label="Neutral" count="8" colorClass="border-gray-200 bg-gray-100 text-gray-600" icon={<ShieldCheck size={14} className="text-gray-500" />} />
+          <div className="grid grid-cols-2 gap-2.5 mb-4">
+            <StatusCard label="Hot" count="42" trend="+12" bg="bg-[#FFF0EB]" text="text-orange-600" border="border-orange-100" icon={Flame} />
+            <StatusCard label="Cold" count="18" trend="+3" bg="bg-[#EBF4FF]" text="text-blue-600" border="border-blue-100" icon={Snowflake} />
+            <StatusCard label="Warm" count="27" trend="+8" bg="bg-[#FFFDF0]" text="text-yellow-600" border="border-yellow-100" icon={Sun} />
+            <StatusCard label="Neutral" count="9" trend="+1" bg="bg-gray-50" text="text-gray-600" border="border-gray-200" icon={Cloud} />
           </div>
 
           <div className="relative mb-4">
@@ -189,8 +195,8 @@ const ChatInterface = () => {
           </div>
 
           <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar space-y-1.5 pb-28">
-            {CUSTOMERS.map((customer) => {
-              const lastMsg = messages.length > 0 && selectedCustomerId === customer.id ? messages[messages.length - 1].text : customer.messages[customer.messages.length - 1].text;
+            {allCustomers.map((customer) => {
+              const lastMsg = customer.messages.length > 0 ? customer.messages[customer.messages.length - 1].text : "No messages";
               return (
                 <button 
                   key={customer.id} 
@@ -199,30 +205,33 @@ const ChatInterface = () => {
                     setSelectedCustomerId(customer.id);
                     setShowContactInfo(true);
                   }}
-                  className={`w-full flex items-center gap-3 p-3 rounded-2xl border transition-all group ${
+                  className={`w-full flex items-center gap-3 p-3 rounded-2xl border border-transparent transition-all group relative overflow-hidden ${
                     selectedCustomerId === customer.id 
-                      ? "bg-blue-50 border-blue-200 shadow-sm" 
-                      : "bg-white border-transparent hover:border-gray-100 hover:bg-gray-50/50"
+                      ? "shadow-sm" 
+                      : "bg-white hover:bg-gray-50/50"
                   }`}
                 >
-                  <div className={`w-10 h-10 rounded-full border flex items-center justify-center font-bold shrink-0 ${
-                    selectedCustomerId === customer.id ? "bg-blue-600 text-white border-blue-600" : "bg-gray-100 border-gray-200 text-gray-400"
+                  {selectedCustomerId === customer.id && (
+                    <div className="absolute inset-0 bg-gradient-to-r from-blue-50 via-blue-50/30 to-transparent pointer-events-none" />
+                  )}
+                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold shrink-0 relative z-10 ${
+                    selectedCustomerId === customer.id ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-400"
                   }`}>
                     {customer.name.substring(0, 1)}
                   </div>
                   <div className="flex-1 text-left min-w-0">
                     <div className="flex justify-between items-center mb-0.5">
-                      <span className={`text-[13px] font-black tracking-tight truncate ${selectedCustomerId === customer.id ? "text-blue-900" : "text-gray-900"}`}>
-                        {customer.name}
-                      </span>
-                      <span className={`text-[9px] font-bold ${selectedCustomerId === customer.id ? "text-blue-500" : "text-gray-400"}`}>
-                        {customer.time}
-                      </span>
-                    </div>
-                    <p className={`text-[11px] font-medium truncate ${selectedCustomerId === customer.id ? "text-blue-700/60" : "text-gray-400"}`}>
-                      {lastMsg}
-                    </p>
+                    <span className={`text-[13px] font-black tracking-tight truncate relative z-10 ${selectedCustomerId === customer.id ? "text-blue-900" : "text-gray-900"}`}>
+                      {customer.name}
+                    </span>
+                    <span className={`text-[9px] font-bold relative z-10 ${selectedCustomerId === customer.id ? "text-blue-500" : "text-gray-400"}`}>
+                      {customer.time}
+                    </span>
                   </div>
+                  <p className={`text-[11px] font-medium truncate relative z-10 ${selectedCustomerId === customer.id ? "text-blue-700/60" : "text-gray-400"}`}>
+                    {lastMsg}
+                  </p>
+                </div>
                 </button>
               )
             })}
@@ -234,7 +243,7 @@ const ChatInterface = () => {
       <div className="flex-1 flex flex-col bg-white/90 backdrop-blur-2xl rounded-[32px] border border-white shadow-xl h-full overflow-hidden relative animate-in zoom-in-95 duration-500">
         
         <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar bg-gray-50/20">
-          {messages.map((msg) => (
+          {currentCustomer.messages.map((msg) => (
             <div key={msg.id} className={`flex ${msg.sender === 'bot' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
               <div className={`flex flex-col max-w-[75%] ${msg.sender === 'bot' ? 'items-end' : 'items-start'}`}>
                 <div className={`px-4 py-2.5 rounded-2xl text-[13px] font-bold leading-relaxed shadow-sm ${
@@ -263,23 +272,51 @@ const ChatInterface = () => {
               </button>
               {showPlusMenu && (
                 <div className="absolute bottom-full left-0 mb-3 w-40 bg-white border border-gray-100 rounded-2xl shadow-2xl p-2 z-50 animate-in slide-in-from-bottom-2">
-                  <button className="w-full flex items-center gap-2 p-2 hover:bg-gray-50 rounded-xl text-[12px] font-bold text-gray-700">
+                  <input 
+                    type="file" 
+                    ref={imageInputRef} 
+                    className="hidden" 
+                    accept="image/*"
+                    onChange={(e) => {
+                      console.log("Image selected:", e.target.files?.[0]);
+                      setShowPlusMenu(false);
+                    }}
+                  />
+                  <input 
+                    type="file" 
+                    ref={docInputRef} 
+                    className="hidden" 
+                    accept=".pdf,.doc,.docx,.txt"
+                    onChange={(e) => {
+                      console.log("Doc selected:", e.target.files?.[0]);
+                      setShowPlusMenu(false);
+                    }}
+                  />
+                  <button 
+                    onClick={() => imageInputRef.current?.click()}
+                    className="w-full flex items-center gap-2 p-2 hover:bg-gray-50 rounded-xl text-[12px] font-bold text-gray-700"
+                  >
                      <ImageIcon size={14} className="text-blue-500" /> Add Image
                   </button>
-                  <button className="w-full flex items-center gap-2 p-2 hover:bg-gray-50 rounded-xl text-[12px] font-bold text-gray-700">
+                  <button 
+                    onClick={() => docInputRef.current?.click()}
+                    className="w-full flex items-center gap-2 p-2 hover:bg-gray-50 rounded-xl text-[12px] font-bold text-gray-700"
+                  >
                      <FileText size={14} className="text-purple-500" /> Add Doc
                   </button>
                 </div>
               )}
             </div>
-            <input 
-              type="text"
-              placeholder="Type your message..." 
-              className="text-gray-800 text-[13px] font-bold flex-1 bg-transparent outline-none placeholder:text-gray-300"
-              value={inputValue}
-              onChange={(e) => setInputValue(e.target.value)}
-              onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
-            />
+            <div className="flex-1 flex flex-col">
+              <input 
+                type="text"
+                placeholder="Type your message..."
+                className="text-gray-800 text-[13px] font-bold w-full bg-transparent outline-none placeholder:text-gray-300"
+                value={inputValue}
+                onChange={(e) => setInputValue(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+              />
+            </div>
             <div className="flex items-center gap-1.5">
               <button className="p-2 text-gray-300 hover:text-gray-600 transition-colors"><Mic size={18} /></button>
               <button 
@@ -306,7 +343,7 @@ const ChatInterface = () => {
 
             <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar pb-32">
               <div className="flex flex-col items-center mb-6 text-center">
-                <div className="w-24 h-24 bg-gray-100 rounded-full border-4 border-white shadow-lg mb-3 flex items-center justify-center font-black text-3xl text-gray-300">
+                <div className="w-24 h-24 bg-gray-100 rounded-full shadow-lg mb-3 flex items-center justify-center font-black text-3xl text-gray-300">
                   {currentCustomer.name.substring(0, 1)}
                 </div>
                 <h3 className="text-lg font-black text-gray-900 tracking-tight">{currentCustomer.name}</h3>
@@ -341,10 +378,10 @@ const ChatInterface = () => {
                       <Navigation size={12} className="text-blue-600 rotate-180 fill-blue-600" />
                     </div>
                     <div className="h-3 w-full bg-gray-100 rounded-full flex overflow-hidden p-0.5 gap-0.5 shadow-inner">
-                      <div className="h-full w-1/4 bg-gray-300 rounded-full" />
-                      <div className="h-full w-1/4 bg-blue-500 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.4)]" />
-                      <div className="h-full w-1/4 bg-orange-400 rounded-full" />
-                      <div className="h-full w-1/4 bg-red-500 rounded-full" />
+                      <div className="h-full w-1/4 bg-gray-300 rounded-full cursor-pointer transition-all hover:brightness-110" title="Cold" />
+                      <div className="h-full w-1/4 bg-blue-500 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.4)] cursor-pointer transition-all hover:brightness-110" title="Neutral" />
+                      <div className="h-full w-1/4 bg-orange-400 rounded-full cursor-pointer transition-all hover:brightness-110" title="Warm" />
+                      <div className="h-full w-1/4 bg-red-500 rounded-full cursor-pointer transition-all hover:brightness-110" title="Hot" />
                     </div>
                  </div>
               </div>
@@ -353,9 +390,14 @@ const ChatInterface = () => {
               <div className="space-y-2">
                  <span className="text-[9px] font-black text-gray-400 uppercase tracking-widest block mb-1">Progress Tracker</span>
                  {currentCustomer.progress.map((todo, i) => (
-                   <div key={i} className="flex items-center justify-between p-3 rounded-xl bg-white border border-gray-50 hover:border-blue-100 cursor-pointer transition-all group shadow-sm">
-                     <span className="text-[11px] font-bold text-gray-700">{todo}</span>
-                     <div className="w-4 h-4 rounded-full border-2 border-gray-200 group-hover:border-blue-500 transition-colors" />
+                   <div key={i} className="flex items-center justify-between p-4 rounded-full bg-white border border-gray-100 hover:border-blue-200 cursor-pointer transition-all group overflow-hidden relative">
+                     <div className="absolute inset-0 bg-gradient-to-r from-blue-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+                     <span className="text-[12px] font-bold text-gray-800 relative z-10">{todo}</span>
+                     <div className="relative z-10">
+                        <div className="w-5 h-5 rounded-full border-2 border-gray-200 group-hover:border-blue-500 transition-all flex items-center justify-center">
+                          <CheckCircle2 size={12} className="text-blue-500 opacity-0 group-hover:opacity-100 scale-75 group-hover:scale-100 transition-all" />
+                        </div>
+                     </div>
                    </div>
                  ))}
               </div>
@@ -365,10 +407,8 @@ const ChatInterface = () => {
       )}
 
       <style jsx global>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 3px; }
-        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.05); border-radius: 10px; }
-        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.1); }
+        .custom-scrollbar::-webkit-scrollbar { width: 0px; display: none; }
+        .custom-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
       `}</style>
     </div>
   );

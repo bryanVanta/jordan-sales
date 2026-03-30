@@ -1,0 +1,65 @@
+{
+  "meta": {
+    "project": "Jordan",
+    "purpose": "Lead discovery for Jordan sales bot",
+    "notes": [
+      "This file is a Jordan-specific OpenClaw template derived from the Jeff example.",
+      "Keep secrets and runtime values in backend/.env, not in this JSON."
+    ]
+  },
+  "agent": {
+    "name": "Jordan",
+    "namespace": "jordan-sales",
+    "role": "sales-lead-finder",
+    "maxLeadsPerRun": 5
+  },
+  "requestShape": {
+    "context": {
+      "agentId": "${OPENCLAW_JORDAN_AGENT_ID}",
+      "workflowId": "${OPENCLAW_JORDAN_WORKFLOW_ID}",
+      "botName": "${OPENCLAW_JORDAN_BOT_NAME}",
+      "namespace": "${OPENCLAW_JORDAN_NAMESPACE}"
+    },
+    "productInfo": {
+      "productName": "",
+      "productType": "",
+      "description": "",
+      "keyBenefit": "",
+      "targetCustomer": "",
+      "location": "",
+      "moreAboutProduct": "",
+      "trainingAssets": {
+        "companyInfo": "",
+        "knowledgeBase": "",
+        "salesPlaybook": ""
+      }
+    },
+    "constraints": {
+      "maxLeads": 5,
+      "displayFieldsOnly": [
+        "company",
+        "person",
+        "email",
+        "location",
+        "temp",
+        "status",
+        "intent",
+        "next",
+        "channel"
+      ]
+    }
+  },
+  "responseShape": {
+    "leads": [
+      {
+        "company": "",
+        "person": "",
+        "email": "",
+        "phone": "",
+        "location": "",
+        "intent": "",
+        "channel": "Email"
+      }
+    ]
+  }
+}

@@ -1,29 +1,61 @@
 "use client";
-import React, { useState, useMemo, useRef } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Search, Filter, Play, Pause, Plus, FileUp, Edit3, Check, ChevronUp, ChevronDown, X, Mail, MessageCircle, Send, ChevronRight } from 'lucide-react';
 
-const INITIAL_PROJECTS = [
-  { id: 1, company: 'Starlight Media', person: 'Sarah Connor', email: 'sarah.c@starlight.com', location: 'Kuala Lumpur, Malaysia', temp: 'Hot', last: '2h ago', intent: 'Looking for scaling', next: 'Send Promo', channel: 'Whatsapp' },
-  { id: 2, company: 'Nova Tech', person: 'John Wick', email: 'j.wick@continental.com', location: 'Penang, Malaysia', temp: 'Warm', last: '1d ago', intent: 'Interested in automation', next: 'Follow Up', channel: 'Email' },
-  { id: 3, company: 'Echo Systems', person: 'Ellen Ripley', email: 'ripley@weyland.com', location: 'Johor Bahru, Malaysia', temp: 'Cold', last: '5d ago', intent: 'Not interested currently', next: 'Escalate', channel: 'Telegram' },
-  { id: 4, company: 'Glitch Ltd.', person: 'Neo Anderson', email: 'neo@matrix.net', location: 'Singapore', temp: 'Neutral', last: '3h ago', intent: 'Wants to understand pricing', next: 'Close Deal', channel: 'Whatsapp' },
-  { id: 5, company: 'Cyberdyne', person: 'Miles Dyson', email: 'miles.d@cyberdyne.com', location: 'Bangkok, Thailand', temp: 'Hot', last: '30m ago', intent: 'Security infrastructure', next: 'Send Promo', channel: 'Email' },
-  { id: 6, company: 'Tyrell Corp', person: 'Eldon Tyrell', email: 'tyrell@replica.co', location: 'Jakarta, Indonesia', temp: 'Cold', last: '12h ago', intent: 'Legacy data migration', next: 'Escalate', channel: 'Whatsapp' },
-];
+const API_BASE_URL = 'http://localhost:5000/api';
 
 export default function ProjectsPage() {
-  const [projects, setProjects] = useState(INITIAL_PROJECTS);
+  const [projects, setProjects] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [isOutreachActive, setIsOutreachActive] = useState(false);
-  const [selectedProjects, setSelectedProjects] = useState<number[]>([]);
+  const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add');
   const [formData, setFormData] = useState({
     company: '', person: '', email: '', location: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email'
   });
+
+  const loadLeads = async () => {
+    setLoading(true);
+    setError('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/leads`);
+      if (!response.ok) {
+        throw new Error('Failed to load leads');
+      }
+
+      const result = await response.json();
+      const rows = (result.data || []).map((lead: any) => ({
+        id: String(lead.id),
+        company: lead.companyName || lead.company || 'Unknown Company',
+        person: lead.person || '',
+        email: lead.email || '',
+        phone: lead.phone || '',
+        location: lead.location || '',
+        temp: lead.temp || lead.leadTemperature || 'Neutral',
+        last: lead.status || 'new',
+        intent: lead.intent || '',
+        next: lead.next || lead.nextAction || 'Follow Up',
+        channel: lead.channel || 'Email',
+      }));
+      setProjects(rows);
+    } catch (loadError) {
+      console.error(loadError);
+      setError('Could not load leads from the backend.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadLeads();
+  }, []);
 
   const filteredProjects = useMemo(() => {
     let items = projects.filter(proj => 
@@ -44,7 +76,7 @@ export default function ProjectsPage() {
     return items;
   }, [projects, searchTerm, sortConfig]);
 
-  const toggleProject = (id: number) => {
+  const toggleProject = (id: string) => {
     setSelectedProjects(prev => prev.includes(id) ? prev.filter(l => l !== id) : [...prev, id]);
   };
 
@@ -75,13 +107,42 @@ export default function ProjectsPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (modalMode === 'add') {
-      const newProject = { ...formData, id: Date.now(), last: 'Just now' };
-      setProjects([newProject, ...projects]);
-    } else {
-      setProjects(projects.map(l => l.id === selectedProjects[0] ? { ...l, ...formData } : l));
-    }
-    setIsModalOpen(false);
+
+    const saveLead = async () => {
+      const payload = {
+        company: formData.company,
+        companyName: formData.company,
+        person: formData.person,
+        email: formData.email,
+        location: formData.location,
+        temp: formData.temp,
+        leadTemperature: formData.temp,
+        status: 'new',
+        intent: formData.intent,
+        next: formData.next,
+        nextAction: formData.next,
+        channel: formData.channel,
+      };
+
+      const endpoint = modalMode === 'add'
+        ? `${API_BASE_URL}/leads`
+        : `${API_BASE_URL}/leads/${selectedProjects[0]}`;
+      const method = modalMode === 'add' ? 'POST' : 'PUT';
+
+      await fetch(endpoint, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      setIsModalOpen(false);
+      await loadLeads();
+    };
+
+    saveLead().catch((submitError) => {
+      console.error(submitError);
+      setError('Could not save the lead.');
+    });
   };
 
   const getTempStyle = (temp: string) => {
@@ -125,6 +186,15 @@ export default function ProjectsPage() {
 
       <div className="flex-1 bg-white/80 backdrop-blur-md rounded-[24px] border border-gray-100 shadow-sm overflow-hidden flex flex-col min-h-[550px] z-10">
         <div ref={scrollContainerRef} className="overflow-x-auto overflow-y-auto flex-1 relative custom-scrollbar">
+          {loading ? (
+            <div className="flex h-full items-center justify-center px-8 py-16 text-center text-sm font-bold text-gray-500">
+              Loading leads from Firebase...
+            </div>
+          ) : error ? (
+            <div className="flex h-full items-center justify-center px-8 py-16 text-center text-sm font-bold text-red-500">
+              {error}
+            </div>
+          ) : (
           <table className="w-full text-left border-collapse min-w-[1520px]">
             <thead className="sticky top-0 z-20">
               <tr className="border-b border-gray-100 bg-white/95 backdrop-blur-sm">
@@ -149,7 +219,7 @@ export default function ProjectsPage() {
                   </td>
                   <td className="py-2.5 px-4 whitespace-nowrap sticky left-12 z-10 bg-white group-hover:bg-[#f8faff] transition-colors shadow-[2px_0_0_rgba(0,0,0,0.05)]"><span className="text-[13px] font-black text-gray-800">{proj.company}</span></td>
                   <td className="py-2.5 px-4 whitespace-nowrap font-bold text-[13px] text-gray-600">{proj.person}</td>
-                  <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-blue-500/80">{proj.email}</td>
+                  <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-blue-500/80">{proj.email || 'No email found'}</td>
                   <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-gray-500">{proj.location}</td>
                   <td className="py-2.5 px-4 whitespace-nowrap"><div className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider border flex items-center gap-1 w-fit ${getTempStyle(proj.temp)}`}>{proj.temp}</div></td>
                   <td className="py-2.5 px-4 whitespace-nowrap"><span className="text-[10px] font-bold text-gray-400 italic">{proj.last}</span></td>
@@ -160,6 +230,7 @@ export default function ProjectsPage() {
               ))}
             </tbody>
           </table>
+          )}
         </div>
       </div>
 

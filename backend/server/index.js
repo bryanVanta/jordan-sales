@@ -15,13 +15,15 @@ const messagesRouter = require('./routes/messages');
 const trainingRouter = require('./routes/training');
 const llmRouter = require('./routes/llm');
 const productsRouter = require('./routes/products');
+const productInfoRouter = require('./routes/productInfo');
+const scrapingRouter = require('./routes/scraping');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '100mb' }));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -35,6 +37,8 @@ app.use('/api/messages', messagesRouter);
 app.use('/api/training', trainingRouter);
 app.use('/api/llm', llmRouter);
 app.use('/api/products', productsRouter);
+app.use('/api/product-info', productInfoRouter);
+app.use('/api/scraping', scrapingRouter);
 
 // API status endpoint
 app.get('/api/status', (req, res) => {

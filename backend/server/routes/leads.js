@@ -8,9 +8,20 @@ const router = express.Router();
 const {
   createLead,
   getLead,
+  getAllLeads,
   getLeadsByCompany,
   updateLead,
 } = require('../services/firestoreService');
+
+// Get all leads
+router.get('/', async (req, res) => {
+  try {
+    const leads = await getAllLeads();
+    res.json({ success: true, data: leads });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
 
 // Get leads by company
 router.get('/company/:companyId', async (req, res) => {

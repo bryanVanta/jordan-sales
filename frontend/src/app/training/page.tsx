@@ -1,6 +1,7 @@
 "use client";
 
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { 
   ChevronDown, 
   Upload, 
@@ -20,6 +21,14 @@ import {
 } from 'lucide-react';
 
 export default function TrainingPage() {
+  const router = useRouter();
+  const API_BASE_URL = 'http://localhost:5000/api';
+  const trainingAssetKeyMap: Record<string, 'companyInfo' | 'knowledgeBase' | 'salesPlaybook'> = {
+    'Company Info': 'companyInfo',
+    'Knowledge Base': 'knowledgeBase',
+    'Sales Playbook': 'salesPlaybook',
+  };
+
   const [styleAndTone, setStyleAndTone] = useState('Default');
   const [showToneDropdown, setShowToneDropdown] = useState(false);
   const [characteristics, setCharacteristics] = useState('');
@@ -40,7 +49,10 @@ export default function TrainingPage() {
   // Upload Logic states
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingAsset, setUploadingAsset] = useState<string | null>(null);
-  const [uploadedFiles, setUploadedFiles] = useState<{ [key: string]: string }>({});
+  const [uploadedFiles, setUploadedFiles] = useState<Record<string, { fileName: string; mimeType?: string; extractedText?: string }>>({});
+  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [findLeadsState, setFindLeadsState] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [statusMessage, setStatusMessage] = useState('');
 
   const toneOptions = ['Default', 'Professional', 'Casual', 'Enthusiastic', 'Precise', 'Witty', 'Aggressive'];
   const productTypeOptions = ['Service', 'Product', 'Software', 'Consulting', 'Agency', 'Other'];
@@ -91,14 +103,173 @@ export default function TrainingPage() {
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (file && uploadingAsset) {
-      setUploadedFiles(prev => ({ ...prev, [uploadingAsset]: file.name }));
+    if (!file || !uploadingAsset) return;
+
+    const uploadSelectedFile = async () => {
+      setStatusMessage(`Uploading ${file.name}...`);
+
+      const contentBase64 = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+          const result = typeof reader.result === 'string' ? reader.result : '';
+          const base64 = result.includes(',') ? result.split(',')[1] : result;
+          resolve(base64);
+        };
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsDataURL(file);
+      });
+
+      const assetKey = trainingAssetKeyMap[uploadingAsset];
+      const response = await fetch(`${API_BASE_URL}/product-info/upload-asset`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          assetKey,
+          fileName: file.name,
+          mimeType: file.type,
+          contentBase64,
+        }),
+      });
+
+      if (!response.ok) {
+        let message = `Failed to upload ${file.name}`;
+        try {
+          const errorResult = await response.json();
+          if (errorResult?.error) {
+            message = errorResult.error;
+          }
+        } catch {}
+        throw new Error(message);
+      }
+
+      const result = await response.json();
+      setUploadedFiles((prev) => ({
+        ...prev,
+        [uploadingAsset]: {
+          fileName: result.data.fileName || file.name,
+          mimeType: result.data.mimeType || file.type,
+          extractedText: result.data.extractedText || '',
+        },
+      }));
+      setStatusMessage(`${file.name} uploaded and extracted.`);
+    };
+
+    uploadSelectedFile().catch((error) => {
+      console.error(error);
+      setStatusMessage(`Could not upload ${file.name}.`);
+    }).finally(() => {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+      setUploadingAsset(null);
+    });
+  };
+
+  const buildProductInfoPayload = () => ({
+    productName,
+    productType,
+    description,
+    keyBenefit: benefit,
+    targetCustomer,
+    location,
+    moreAboutProduct,
+    trainingAssets: {
+      companyInfo: uploadedFiles['Company Info'] || { fileName: '', mimeType: '', extractedText: '' },
+      knowledgeBase: uploadedFiles['Knowledge Base'] || { fileName: '', mimeType: '', extractedText: '' },
+      salesPlaybook: uploadedFiles['Sales Playbook'] || { fileName: '', mimeType: '', extractedText: '' },
+    },
+  });
+
+  useEffect(() => {
+    const loadProductInfo = async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/product-info/current`);
+        if (!response.ok) return;
+
+        const result = await response.json();
+        const data = result.data;
+        if (!data) return;
+
+        setProductName(data.productName || '');
+        setProductType(data.productType || 'Service');
+        setDescription(data.description || '');
+        setBenefit(data.keyBenefit || '');
+        setTargetCustomer(data.targetCustomer || '');
+        setLocation(data.location || '');
+        setMoreAboutProduct(data.moreAboutProduct || '');
+        setUploadedFiles({
+          'Company Info': data.trainingAssets?.companyInfo || { fileName: '', mimeType: '', extractedText: '' },
+          'Knowledge Base': data.trainingAssets?.knowledgeBase || { fileName: '', mimeType: '', extractedText: '' },
+          'Sales Playbook': data.trainingAssets?.salesPlaybook || { fileName: '', mimeType: '', extractedText: '' },
+        });
+      } catch (error) {
+        console.error('Failed to load product info:', error);
+      }
+    };
+
+    loadProductInfo();
+  }, []);
+
+  const handleSaveChanges = async () => {
+    setSaveState('saving');
+    setStatusMessage('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/product-info/current`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildProductInfoPayload()),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to save product info');
+      }
+
+      setSaveState('saved');
+      setStatusMessage('Product & Services details saved to Product-Info.');
+      window.setTimeout(() => setSaveState('idle'), 1800);
+    } catch (error) {
+      console.error(error);
+      setSaveState('error');
+      setStatusMessage('Could not save Product & Services details.');
+    }
+  };
+
+  const handleFindLeads = async () => {
+    setFindLeadsState('loading');
+    setStatusMessage('');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/scraping/find-leads`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(buildProductInfoPayload()),
+      });
+
+      if (!response.ok) {
+        throw new Error('Lead discovery failed');
+      }
+
+      const result = await response.json();
+      const leadCount = result.data?.count || 0;
+      setStatusMessage(`Found ${leadCount} lead${leadCount === 1 ? '' : 's'}. Redirecting to leads...`);
+      router.push('/leads');
+    } catch (error) {
+      console.error(error);
+      setFindLeadsState('error');
+      setStatusMessage('Could not find leads from the current Product & Services details.');
     }
   };
 
   return (
     <div className="flex flex-col min-h-full px-4 sm:px-8 lg:px-12 relative overflow-hidden pb-40 lg:pb-32">
-      <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
+      <input
+        type="file"
+        ref={fileInputRef}
+        className="hidden"
+        accept=".pdf,.doc,.docx,.txt,.rtf,.odt"
+        onChange={handleFileUpload}
+      />
       
       {/* Background accents consistent with other pages */}
       <div className="absolute top-0 right-0 w-[300px] sm:w-[500px] h-[300px] sm:h-[500px] bg-blue-500/5 rounded-full blur-[120px] pointer-events-none -z-10"></div>
@@ -224,14 +395,14 @@ export default function TrainingPage() {
                         onClick={() => triggerUpload(item.label)}
                         className="flex items-center justify-center gap-2 bg-white border border-gray-100 px-4 py-2 rounded-xl text-[11px] font-black text-gray-800 shadow-sm hover:bg-gray-50 uppercase tracking-tight"
                       >
-                        <Upload size={14} className="text-blue-600" /> {uploadedFiles[item.label] ? 'Replace' : 'Upload'}
+                        <Upload size={14} className="text-blue-600" /> {uploadedFiles[item.label]?.fileName ? 'Replace' : 'Upload'}
                       </button>
                     </div>
-                    {uploadedFiles[item.label] && (
+                    {uploadedFiles[item.label]?.fileName && (
                        <div className="bg-emerald-50 px-5 py-2.5 flex items-center justify-between border-t border-emerald-100/50">
                           <div className="flex items-center gap-2 truncate">
                              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                             <span className="text-[10px] font-black text-emerald-700 truncate">{uploadedFiles[item.label]}</span>
+                             <span className="text-[10px] font-black text-emerald-700 truncate">{uploadedFiles[item.label]?.fileName}</span>
                           </div>
                           <button onClick={() => setUploadedFiles(prev => { const n = {...prev}; delete n[item.label]; return n; })} className="text-emerald-500 hover:text-emerald-700"><X size={12} /></button>
                        </div>
@@ -257,16 +428,31 @@ export default function TrainingPage() {
       <div className="fixed bottom-24 lg:bottom-[40px] left-0 right-0 px-4 sm:px-10 lg:px-20 pointer-events-none z-50">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between w-full max-w-[1600px] mx-auto pointer-events-auto gap-3">
           <div className="flex items-center justify-center">
-            <button className="flex items-center justify-center gap-2 bg-gray-900 border border-white/10 text-white px-6 sm:px-8 py-3 sm:py-4 rounded-[22px] font-black text-[11px] sm:text-[12px] tracking-[0.1em] shadow-2xl hover:bg-black transition-all transform hover:-translate-y-1 uppercase w-full sm:w-auto">
+            <button
+              onClick={handleSaveChanges}
+              disabled={saveState === 'saving'}
+              className="flex items-center justify-center gap-2 bg-gray-900 border border-white/10 text-white px-6 sm:px-8 py-3 sm:py-4 rounded-[22px] font-black text-[11px] sm:text-[12px] tracking-[0.1em] shadow-2xl hover:bg-black transition-all transform hover:-translate-y-1 uppercase w-full sm:w-auto disabled:opacity-60 disabled:transform-none"
+            >
               <Save size={16} className="text-blue-500" /> Save Changes
             </button>
           </div>
-          <button className="flex items-center justify-center gap-3 bg-blue-600 text-white px-6 sm:px-10 py-3 sm:py-4 rounded-[22px] font-black text-[11px] sm:text-[12px] tracking-[0.2em] shadow-[0_15px_40px_rgba(37,99,235,0.4)] hover:bg-black hover:-translate-y-1 transition-all active:scale-95 uppercase group border border-white/10">
+          <button
+            onClick={handleFindLeads}
+            disabled={findLeadsState === 'loading'}
+            className="flex items-center justify-center gap-3 bg-blue-600 text-white px-6 sm:px-10 py-3 sm:py-4 rounded-[22px] font-black text-[11px] sm:text-[12px] tracking-[0.2em] shadow-[0_15px_40px_rgba(37,99,235,0.4)] hover:bg-black hover:-translate-y-1 transition-all active:scale-95 uppercase group border border-white/10 disabled:opacity-60 disabled:transform-none"
+          >
             <Search size={18} className="group-hover:rotate-12 transition-transform" /> 
-            Find Leads
+            {findLeadsState === 'loading' ? 'Finding Leads...' : 'Find Leads'}
             <ChevronRight size={16} className="ml-1 opacity-50 group-hover:translate-x-1 transition-transform" />
           </button>
         </div>
+        {statusMessage ? (
+          <div className="mt-3 text-center">
+            <span className="inline-flex rounded-full bg-white/90 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-gray-700 shadow-lg">
+              {statusMessage}
+            </span>
+          </div>
+        ) : null}
       </div>
 
       <style jsx global>{`

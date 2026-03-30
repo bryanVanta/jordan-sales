@@ -210,6 +210,7 @@ export default function TrainingPage() {
               <div className="space-y-3 pt-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Training Assets</label>
                 {[
+                  { label: 'Company Info', icon: <Briefcase size={16} /> },
                   { label: 'Knowledge Base', icon: <Database size={16} /> },
                   { label: 'Sales Playbook', icon: <Terminal size={16} /> }
                 ].map((item) => (

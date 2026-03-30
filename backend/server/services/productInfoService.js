@@ -12,6 +12,7 @@ const { promisify } = require('util');
 
 const COLLECTION_NAME = 'Product-Info';
 const CURRENT_DOC_ID = 'current';
+const TRAINING_ASSET_KEYS = ['companyInfo', 'knowledgeBase', 'salesPlaybook'];
 const execFileAsync = promisify(execFile);
 
 const normalizeAsset = (asset) => {
@@ -171,7 +172,7 @@ async function extractDocumentText({ fileName = '', mimeType = '', contentBase64
 }
 
 async function saveTrainingAsset(assetKey, assetData) {
-  const validKeys = ['companyInfo', 'knowledgeBase', 'salesPlaybook'];
+  const validKeys = TRAINING_ASSET_KEYS;
   if (!validKeys.includes(assetKey)) {
     throw new Error('Invalid training asset key');
   }
@@ -214,19 +215,31 @@ async function saveCurrentProductInfo(data) {
   const payload = normalizePayload(data);
   const docRef = db.collection(COLLECTION_NAME).doc(CURRENT_DOC_ID);
   const existingDoc = await docRef.get();
+  const existingData = existingDoc.exists ? existingDoc.data() : {};
 
-  await docRef.set(
-    {
-      ...payload,
-      id: CURRENT_DOC_ID,
-      createdAt: existingDoc.exists ? existingDoc.data().createdAt : new Date(),
-      updatedAt: new Date(),
-    },
-    { merge: true }
-  );
+  // Merge training assets: preserve extractedText and uploadedAt from Firebase
+  // so that saving the form never wipes previously uploaded asset content.
+  const mergedTrainingAssets = {};
+  for (const key of TRAINING_ASSET_KEYS) {
+    const incoming = payload.trainingAssets[key] || {};
+    const existing = existingData.trainingAssets?.[key] || {};
+    mergedTrainingAssets[key] = {
+      ...incoming,
+      extractedText: incoming.extractedText || existing.extractedText || '',
+      uploadedAt: incoming.uploadedAt || existing.uploadedAt || null,
+    };
+  }
 
-  const savedDoc = await docRef.get();
-  return { id: savedDoc.id, ...savedDoc.data() };
+  const savedData = {
+    ...payload,
+    trainingAssets: mergedTrainingAssets,
+    id: CURRENT_DOC_ID,
+    createdAt: existingDoc.exists ? existingData.createdAt || new Date() : new Date(),
+    updatedAt: new Date(),
+  };
+
+  await docRef.set(savedData, { merge: true });
+  return savedData;
 }
 
 async function getCurrentProductInfo() {

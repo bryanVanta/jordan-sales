@@ -49,7 +49,7 @@ export default function TrainingPage() {
   // Upload Logic states
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingAsset, setUploadingAsset] = useState<string | null>(null);
-  const [uploadedFiles, setUploadedFiles] = useState<Record<string, { fileName: string; mimeType?: string; extractedText?: string }>>({});
+  const [uploadedFiles, setUploadedFiles] = useState<Record<string, { fileName: string; mimeType?: string; extractedText?: string; uploadedAt?: string | null }>>({});
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [findLeadsState, setFindLeadsState] = useState<'idle' | 'loading' | 'error'>('idle');
   const [statusMessage, setStatusMessage] = useState('');
@@ -149,6 +149,7 @@ export default function TrainingPage() {
           fileName: result.data.fileName || file.name,
           mimeType: result.data.mimeType || file.type,
           extractedText: result.data.extractedText || '',
+          uploadedAt: result.data.uploadedAt || null,
         },
       }));
       setStatusMessage(`${file.name} uploaded and extracted.`);

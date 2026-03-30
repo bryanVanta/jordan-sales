@@ -214,7 +214,7 @@ async function findLeadsWithOpenClawRpc(productInfo) {
     agentId: OPENCLAW_JORDAN_AGENT_ID || 'main',
     idempotencyKey: `jordan-leads-${randomUUID()}`,
     message: buildJordanPrompt(productInfo),
-    timeout: String(Math.ceil(OPENCLAW_JORDAN_RPC_TIMEOUT_MS / 1000)),
+    timeout: Math.ceil(OPENCLAW_JORDAN_RPC_TIMEOUT_MS / 1000),
   };
 
   const args = [

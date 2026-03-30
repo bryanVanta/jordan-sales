@@ -103,9 +103,9 @@ export default function ProjectsPage() {
   };
 
   return (
-    <div className="flex flex-col h-full px-10 relative overflow-hidden pb-32">
-      <div className="flex items-center justify-between mb-6 z-10">
-        <div className="flex items-center gap-4 flex-1">
+    <div className="flex flex-col h-full px-4 sm:px-10 relative overflow-hidden pb-40 lg:pb-32">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 z-10 gap-4">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 flex-1 w-full">
           <div className="relative w-full max-w-xs group">
             <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
             <input 
@@ -116,7 +116,7 @@ export default function ProjectsPage() {
               className="w-full bg-white border border-gray-100 rounded-xl py-2 pl-10 pr-4 text-[13px] font-bold outline-none focus:ring-2 focus:ring-blue-100 transition-all placeholder:text-gray-400 shadow-sm"
             />
           </div>
-          <button className="flex items-center gap-2 bg-white border border-gray-100 px-4 py-2 rounded-xl text-[13px] font-black text-gray-800 hover:bg-gray-50 transition-all">
+          <button className="flex items-center justify-center gap-2 bg-white border border-gray-100 px-4 py-2 rounded-xl text-[13px] font-black text-gray-800 hover:bg-gray-50 transition-all">
             <Filter size={16} className="text-blue-500" /> Filter
           </button>
         </div>
@@ -161,20 +161,20 @@ export default function ProjectsPage() {
         </div>
       </div>
 
-      <div className="fixed bottom-[60px] left-0 right-0 px-20 pointer-events-none z-50">
-        <div className="flex items-center justify-between w-full max-w-[1600px] mx-auto pointer-events-auto">
-          <div className="flex items-center gap-2">
-            <button onClick={handleAdd} className="flex items-center gap-2 bg-gray-900 border border-white/10 text-white px-6 py-3 rounded-[18px] text-[12px] font-bold shadow-2xl hover:bg-black transition-all transform hover:-translate-y-1">
+      <div className="fixed bottom-24 lg:bottom-[60px] left-0 right-0 px-4 sm:px-10 lg:px-20 pointer-events-none z-50">
+        <div className="flex flex-col lg:flex-row items-center justify-between w-full max-w-[1600px] mx-auto pointer-events-auto gap-3">
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button onClick={handleAdd} className="flex items-center gap-2 bg-gray-900 border border-white/10 text-white px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-bold shadow-2xl hover:bg-black transition-all transform hover:-translate-y-1">
               <div className="w-5 h-5 rounded-md bg-blue-500 flex items-center justify-center"><Plus size={14} strokeWidth={3} /></div> Add Projects
             </button>
-            <button className="flex items-center gap-2 bg-white border border-gray-100 px-6 py-3 rounded-[18px] text-[12px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all transform hover:-translate-y-1">
+            <button className="flex items-center gap-2 bg-white border border-gray-100 px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all transform hover:-translate-y-1">
               <FileUp size={16} className="text-blue-500" /> Import
             </button>
-            <button disabled={selectedProjects.length === 0} onClick={handleEdit} className={`flex items-center gap-2 bg-white border border-gray-100 px-6 py-3 rounded-[18px] text-[12px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all transform hover:-translate-y-1 ${selectedProjects.length === 0 ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
+            <button disabled={selectedProjects.length === 0} onClick={handleEdit} className={`flex items-center gap-2 bg-white border border-gray-100 px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all transform hover:-translate-y-1 ${selectedProjects.length === 0 ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
               <Edit3 size={16} className="text-purple-500" /> Edit List
             </button>
           </div>
-          <button onClick={() => setIsOutreachActive(!isOutreachActive)} className={`${isOutreachActive ? 'bg-orange-500' : 'bg-blue-600'} text-white px-8 py-3 rounded-[24px] font-black text-[12px] tracking-widest flex items-center gap-3 hover:-translate-y-1 shadow-lg transition-all group`}>
+          <button onClick={() => setIsOutreachActive(!isOutreachActive)} className={`${isOutreachActive ? 'bg-orange-500' : 'bg-blue-600'} text-white px-6 sm:px-8 py-2.5 sm:py-3 rounded-[24px] font-black text-[11px] sm:text-[12px] tracking-widest flex items-center gap-2 sm:gap-3 hover:-translate-y-1 shadow-lg transition-all group`}>
             {isOutreachActive ? <><Pause size={16} fill="white" /> PAUSE OUTREACH</> : <><Play size={16} fill="white" /> START OUTREACH</>}
           </button>
         </div>

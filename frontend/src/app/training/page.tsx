@@ -26,10 +26,6 @@ export default function TrainingPage() {
   const [customerInstructions, setCustomerInstructions] = useState('');
   const [autoSales, setAutoSales] = useState(false);
   
-  const [scrapingTime, setScrapingTime] = useState({ start: '', end: '' });
-  const [sendingLimits, setSendingLimits] = useState({ message: '', time: '' });
-  const [workingTime, setWorkingTime] = useState({ start: '', end: '' });
-
   const [referenceMemories, setReferenceMemories] = useState(true);
   const [referenceChatHistory, setReferenceChatHistory] = useState(true);
 
@@ -80,32 +76,32 @@ export default function TrainingPage() {
   };
 
   return (
-    <div className="flex flex-col h-screen -mt-20 px-12 relative overflow-hidden">
+    <div className="flex flex-col min-h-full px-4 sm:px-8 lg:px-12 relative overflow-hidden pb-40 lg:pb-32">
       <input type="file" ref={fileInputRef} className="hidden" onChange={handleFileUpload} />
       
       {/* Background accents consistent with other pages */}
-      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-blue-500/5 rounded-full blur-[120px] pointer-events-none -z-10"></div>
-      <div className="absolute bottom-0 left-0 w-[400px] h-[400px] bg-purple-500/5 rounded-full blur-[100px] pointer-events-none -z-10"></div>
+      <div className="absolute top-0 right-0 w-[300px] sm:w-[500px] h-[300px] sm:h-[500px] bg-blue-500/5 rounded-full blur-[120px] pointer-events-none -z-10"></div>
+      <div className="absolute bottom-0 left-0 w-[250px] sm:w-[400px] h-[250px] sm:h-[400px] bg-purple-500/5 rounded-full blur-[100px] pointer-events-none -z-10"></div>
 
-      <div className="grid grid-cols-2 gap-10 items-start z-10 mt-24 max-w-[1600px] mx-auto w-full">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 sm:gap-10 items-start z-10 mt-4 sm:mt-10 max-w-[1600px] mx-auto w-full">
         
         {/* ================= LEFT COLUMN: Personalize Jordan ================= */}
-        <div className="flex flex-col h-[620px] bg-white/80 backdrop-blur-3xl rounded-[32px] border border-white p-8 shadow-[0_40px_80px_rgba(0,0,0,0.06)] animate-in slide-in-from-left-4 duration-500">
+        <div className="flex flex-col bg-white/80 backdrop-blur-3xl rounded-[32px] border border-white p-6 sm:p-8 shadow-[0_40px_80px_rgba(0,0,0,0.06)]">
            <div className="flex items-center gap-3 mb-6 border-b border-gray-50 pb-4 flex-shrink-0">
               <div className="p-2 bg-blue-50 rounded-xl text-blue-600"><Settings size={20} /></div>
-              <h2 className="text-2xl font-black text-gray-900 tracking-tight">Personalize Jordan</h2>
+              <h2 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight">Personalize Jordan</h2>
            </div>
 
-           <div className="flex-1 overflow-y-auto pr-4 custom-scrollbar flex flex-col gap-8">
-              <div className="flex items-center justify-between w-full">
+           <div className="flex flex-col gap-8">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between w-full gap-4">
                 <div className="flex flex-col items-start gap-1">
                   <span className="text-[13px] font-bold text-gray-800 tracking-tight">Style and Tone</span>
                   <span className="text-[11px] font-medium text-gray-400 uppercase tracking-widest">Base personality profile</span>
                 </div>
-                <div className="relative">
+                <div className="relative w-full sm:w-auto">
                   <button 
                     onClick={() => setShowToneDropdown(!showToneDropdown)}
-                    className="flex items-center justify-between bg-white border border-gray-100 px-4 py-2.5 rounded-xl text-[12px] font-black text-gray-800 shadow-sm hover:border-blue-200 transition-all min-w-[140px]"
+                    className="flex items-center justify-between w-full sm:w-auto bg-white border border-gray-100 px-4 py-2.5 rounded-xl text-[12px] font-black text-gray-800 shadow-sm hover:border-blue-200 transition-all min-w-[160px]"
                   >
                     {styleAndTone} <ChevronDown size={14} className={`ml-2 opacity-30 transition-transform ${showToneDropdown ? 'rotate-180' : ''}`} />
                   </button>
@@ -133,28 +129,28 @@ export default function TrainingPage() {
                     value={customerInstructions}
                     onChange={(e) => setCustomerInstructions(e.target.value)}
                     placeholder="How should Jordan handle specific customer objections?"
-                    className="w-full bg-white border border-gray-100 rounded-xl px-4 py-3 text-[13px] font-bold text-gray-800 h-24 resize-none focus:ring-2 focus:ring-blue-100 outline-none transition-all shadow-sm"
+                    className="w-full bg-white border border-gray-100 rounded-xl px-4 py-3 text-[13px] font-bold text-gray-800 h-24 sm:h-32 resize-none focus:ring-2 focus:ring-blue-100 outline-none transition-all shadow-sm"
                   />
                 </div>
               </div>
 
               <div className="pt-4 border-t border-gray-50">
                 <AppleToggle enabled={autoSales} setEnabled={setAutoSales} label="Auto-sales Engine" />
-                <div className={`mt-6 space-y-4 overflow-hidden transition-all duration-500 ${autoSales ? 'max-h-[500px] opacity-100 pb-4' : 'max-h-0 opacity-0 pointer-events-none'}`}>
+                <div className={`mt-6 space-y-4 overflow-hidden transition-all duration-500 ${autoSales ? 'max-h-[800px] opacity-100 pb-4' : 'max-h-0 opacity-0 pointer-events-none'}`}>
                   {[
                     { label: 'Scraping Time', icon: <Clock size={16} className="text-blue-500" /> },
                     { label: 'Sending Limits', icon: <ShieldCheck size={16} className="text-orange-500" /> },
                     { label: 'Working Hours', icon: <Zap size={16} className="text-amber-500" /> }
                   ].map((item) => (
-                    <div key={item.label} className="flex items-center justify-between bg-gray-50/50 p-4 rounded-2xl border border-gray-50/50">
+                    <div key={item.label} className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between bg-gray-50/50 p-4 rounded-2xl border border-gray-50/50 gap-4">
                       <div className="flex items-center gap-3">
                         {item.icon}
                         <span className="text-[12px] font-black text-gray-700 uppercase tracking-tight">{item.label}</span>
                       </div>
                       <div className="flex items-center gap-2">
-                         <input placeholder="Start" className="w-20 bg-white border border-gray-100 py-2 rounded-lg text-center text-[12px] font-bold outline-none focus:ring-2 focus:ring-blue-100 shadow-sm" />
+                         <input placeholder="Start" className="flex-1 sm:w-20 bg-white border border-gray-100 py-2 rounded-lg text-center text-[12px] font-bold outline-none focus:ring-2 focus:ring-blue-100 shadow-sm" />
                          <span className="text-gray-300">/</span>
-                         <input placeholder="End" className="w-20 bg-white border border-gray-100 py-2 rounded-lg text-center text-[12px] font-bold outline-none focus:ring-2 focus:ring-blue-100 shadow-sm" />
+                         <input placeholder="End" className="flex-1 sm:w-20 bg-white border border-gray-100 py-2 rounded-lg text-center text-[12px] font-bold outline-none focus:ring-2 focus:ring-blue-100 shadow-sm" />
                       </div>
                     </div>
                   ))}
@@ -174,15 +170,15 @@ export default function TrainingPage() {
 
 
         {/* ================= RIGHT COLUMN: Product & Services ================= */}
-        <div className="flex flex-col h-[620px] bg-white/80 backdrop-blur-3xl rounded-[32px] border border-white p-8 shadow-[0_40px_80px_rgba(0,0,0,0.06)] animate-in slide-in-from-right-4 duration-500">
+        <div className="flex flex-col bg-white/80 backdrop-blur-3xl rounded-[32px] border border-white p-6 sm:p-8 shadow-[0_40px_80px_rgba(0,0,0,0.06)]">
            <div className="flex items-center gap-3 mb-6 border-b border-gray-50 pb-4 flex-shrink-0">
               <div className="p-2 bg-purple-50 rounded-xl text-purple-600"><Briefcase size={20} /></div>
-              <h2 className="text-2xl font-black text-gray-900 tracking-tight">Product & Services</h2>
+              <h2 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight">Product & Services</h2>
            </div>
 
-           <div className="flex-1 overflow-y-auto pr-4 custom-scrollbar flex flex-col gap-6">
+           <div className="flex flex-col gap-6">
               <FormInput label="Product Name" value={productName} onChange={setProductName} placeholder="e.g. Acme Enterprise AI" />
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <FormInput label="Description" value={description} onChange={setDescription} placeholder="Brief summary" />
                 <FormInput label="Key Benefit" value={benefit} onChange={setBenefit} placeholder="Main selling point" />
               </div>
@@ -194,14 +190,14 @@ export default function TrainingPage() {
                   { label: 'Sales Playbook', icon: <Terminal size={16} /> }
                 ].map((item) => (
                   <div key={item.label} className="flex flex-col bg-gray-50/50 p-1 rounded-2xl border border-gray-100 group hover:border-blue-200 hover:bg-white transition-all overflow-hidden">
-                    <div className="flex items-center justify-between px-5 py-3.5">
+                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between px-4 sm:px-5 py-3.5 gap-3">
                       <div className="flex items-center gap-3">
                         <div className="text-gray-400 group-hover:text-blue-600 transition-colors">{item.icon}</div>
                         <span className="text-[13px] font-bold text-gray-700">{item.label}</span>
                       </div>
                       <button 
                         onClick={() => triggerUpload(item.label)}
-                        className="flex items-center gap-2 bg-white border border-gray-100 px-4 py-2 rounded-xl text-[11px] font-black text-gray-800 shadow-sm hover:bg-gray-50 uppercase tracking-tight"
+                        className="flex items-center justify-center gap-2 bg-white border border-gray-100 px-4 py-2 rounded-xl text-[11px] font-black text-gray-800 shadow-sm hover:bg-gray-50 uppercase tracking-tight"
                       >
                         <Upload size={14} className="text-blue-600" /> {uploadedFiles[item.label] ? 'Replace' : 'Upload'}
                       </button>
@@ -225,22 +221,22 @@ export default function TrainingPage() {
                   value={moreAboutProduct}
                   onChange={(e) => setMoreAboutProduct(e.target.value)}
                   placeholder="Any additional context for Jordan to sound like an expert..."
-                  className="w-full bg-white border border-gray-100 rounded-xl px-4 py-3 text-[13px] font-bold text-gray-800 h-28 resize-none focus:ring-2 focus:ring-blue-100 outline-none transition-all shadow-sm"
+                  className="w-full bg-white border border-gray-100 rounded-xl px-4 py-3 text-[13px] font-bold text-gray-800 h-28 sm:h-32 resize-none focus:ring-2 focus:ring-blue-100 outline-none transition-all shadow-sm"
                 />
               </div>
            </div>
         </div>
       </div>
 
-      {/* FIXED FOOTER BUTTONS - Aligned with Navbar horizontal center */}
-      <div className="fixed bottom-[60px] left-0 right-0 px-20 pointer-events-none z-50">
-        <div className="flex items-center justify-between w-full max-w-[1600px] mx-auto pointer-events-auto">
-          <div className="flex items-center gap-3">
-            <button className="flex items-center gap-2 bg-gray-900 border border-white/10 text-white px-8 py-4 rounded-[22px] font-black text-[12px] tracking-[0.1em] shadow-2xl hover:bg-black transition-all transform hover:-translate-y-1 uppercase">
+      {/* FIXED FOOTER BUTTONS */}
+      <div className="fixed bottom-24 lg:bottom-[40px] left-0 right-0 px-4 sm:px-10 lg:px-20 pointer-events-none z-50">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between w-full max-w-[1600px] mx-auto pointer-events-auto gap-3">
+          <div className="flex items-center justify-center">
+            <button className="flex items-center justify-center gap-2 bg-gray-900 border border-white/10 text-white px-6 sm:px-8 py-3 sm:py-4 rounded-[22px] font-black text-[11px] sm:text-[12px] tracking-[0.1em] shadow-2xl hover:bg-black transition-all transform hover:-translate-y-1 uppercase w-full sm:w-auto">
               <Save size={16} className="text-blue-500" /> Save Changes
             </button>
           </div>
-          <button className="flex items-center gap-3 bg-blue-600 text-white px-10 py-4 rounded-[22px] font-black text-[12px] tracking-[0.2em] shadow-[0_15px_40px_rgba(37,99,235,0.4)] hover:bg-black hover:-translate-y-1 transition-all active:scale-95 uppercase group border border-white/10">
+          <button className="flex items-center justify-center gap-3 bg-blue-600 text-white px-6 sm:px-10 py-3 sm:py-4 rounded-[22px] font-black text-[11px] sm:text-[12px] tracking-[0.2em] shadow-[0_15px_40px_rgba(37,99,235,0.4)] hover:bg-black hover:-translate-y-1 transition-all active:scale-95 uppercase group border border-white/10">
             <Search size={18} className="group-hover:rotate-12 transition-transform" /> 
             Find Leads
             <ChevronRight size={16} className="ml-1 opacity-50 group-hover:translate-x-1 transition-transform" />
@@ -249,7 +245,7 @@ export default function TrainingPage() {
       </div>
 
       <style jsx global>{`
-        .custom-scrollbar::-webkit-scrollbar { width: 5px; }
+        .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.05); border-radius: 10px; }
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.1); }

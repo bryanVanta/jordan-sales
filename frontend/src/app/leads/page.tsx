@@ -3,12 +3,12 @@ import React, { useState, useMemo, useRef } from 'react';
 import { Search, Filter, Play, Pause, Plus, FileUp, Edit3, Check, ChevronUp, ChevronDown, X, Mail, MessageCircle, Send, ChevronRight } from 'lucide-react';
 
 const INITIAL_PROJECTS = [
-  { id: 1, company: 'Starlight Media', person: 'Sarah Connor', email: 'sarah.c@starlight.com', temp: 'Hot', last: '2h ago', intent: 'Looking for scaling', next: 'Send Promo', channel: 'Whatsapp' },
-  { id: 2, company: 'Nova Tech', person: 'John Wick', email: 'j.wick@continental.com', temp: 'Warm', last: '1d ago', intent: 'Interested in automation', next: 'Follow Up', channel: 'Email' },
-  { id: 3, company: 'Echo Systems', person: 'Ellen Ripley', email: 'ripley@weyland.com', temp: 'Cold', last: '5d ago', intent: 'Not interested currently', next: 'Escalate', channel: 'Telegram' },
-  { id: 4, company: 'Glitch Ltd.', person: 'Neo Anderson', email: 'neo@matrix.net', temp: 'Neutral', last: '3h ago', intent: 'Wants to understand pricing', next: 'Close Deal', channel: 'Whatsapp' },
-  { id: 5, company: 'Cyberdyne', person: 'Miles Dyson', email: 'miles.d@cyberdyne.com', temp: 'Hot', last: '30m ago', intent: 'Security infrastructure', next: 'Send Promo', channel: 'Email' },
-  { id: 6, company: 'Tyrell Corp', person: 'Eldon Tyrell', email: 'tyrell@replica.co', temp: 'Cold', last: '12h ago', intent: 'Legacy data migration', next: 'Escalate', channel: 'Whatsapp' },
+  { id: 1, company: 'Starlight Media', person: 'Sarah Connor', email: 'sarah.c@starlight.com', location: 'Kuala Lumpur, Malaysia', temp: 'Hot', last: '2h ago', intent: 'Looking for scaling', next: 'Send Promo', channel: 'Whatsapp' },
+  { id: 2, company: 'Nova Tech', person: 'John Wick', email: 'j.wick@continental.com', location: 'Penang, Malaysia', temp: 'Warm', last: '1d ago', intent: 'Interested in automation', next: 'Follow Up', channel: 'Email' },
+  { id: 3, company: 'Echo Systems', person: 'Ellen Ripley', email: 'ripley@weyland.com', location: 'Johor Bahru, Malaysia', temp: 'Cold', last: '5d ago', intent: 'Not interested currently', next: 'Escalate', channel: 'Telegram' },
+  { id: 4, company: 'Glitch Ltd.', person: 'Neo Anderson', email: 'neo@matrix.net', location: 'Singapore', temp: 'Neutral', last: '3h ago', intent: 'Wants to understand pricing', next: 'Close Deal', channel: 'Whatsapp' },
+  { id: 5, company: 'Cyberdyne', person: 'Miles Dyson', email: 'miles.d@cyberdyne.com', location: 'Bangkok, Thailand', temp: 'Hot', last: '30m ago', intent: 'Security infrastructure', next: 'Send Promo', channel: 'Email' },
+  { id: 6, company: 'Tyrell Corp', person: 'Eldon Tyrell', email: 'tyrell@replica.co', location: 'Jakarta, Indonesia', temp: 'Cold', last: '12h ago', intent: 'Legacy data migration', next: 'Escalate', channel: 'Whatsapp' },
 ];
 
 export default function ProjectsPage() {
@@ -22,14 +22,15 @@ export default function ProjectsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add');
   const [formData, setFormData] = useState({
-    company: '', person: '', email: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email'
+    company: '', person: '', email: '', location: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email'
   });
 
   const filteredProjects = useMemo(() => {
     let items = projects.filter(proj => 
       proj.company.toLowerCase().includes(searchTerm.toLowerCase()) ||
       proj.person.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      proj.email.toLowerCase().includes(searchTerm.toLowerCase())
+      proj.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      proj.location.toLowerCase().includes(searchTerm.toLowerCase())
     );
     if (sortConfig) {
       items.sort((a, b) => {
@@ -55,7 +56,7 @@ export default function ProjectsPage() {
 
   const handleAdd = () => {
     setModalMode('add');
-    setFormData({ company: '', person: '', email: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email' });
+    setFormData({ company: '', person: '', email: '', location: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email' });
     setIsModalOpen(true);
   };
 
@@ -64,7 +65,7 @@ export default function ProjectsPage() {
     const project = projects.find(l => l.id === selectedProjects[0]);
     if (project) {
       setFormData({ 
-        company: project.company, person: project.person, email: project.email, 
+        company: project.company, person: project.person, email: project.email, location: project.location,
         temp: project.temp, intent: project.intent, next: project.next, channel: project.channel 
       });
       setModalMode('edit');
@@ -124,15 +125,15 @@ export default function ProjectsPage() {
 
       <div className="flex-1 bg-white/80 backdrop-blur-md rounded-[24px] border border-gray-100 shadow-sm overflow-hidden flex flex-col min-h-[550px] z-10">
         <div ref={scrollContainerRef} className="overflow-x-auto overflow-y-auto flex-1 relative custom-scrollbar">
-          <table className="w-full text-left border-collapse min-w-[1400px]">
+          <table className="w-full text-left border-collapse min-w-[1520px]">
             <thead className="sticky top-0 z-20">
               <tr className="border-b border-gray-100 bg-white/95 backdrop-blur-sm">
                 <th className="py-3 pl-8 pr-4 w-12 text-center sticky left-0 z-30 bg-white shadow-[2px_0_0_rgba(0,0,0,0.05)]"></th>
                 <th className="py-3 px-4 group cursor-pointer sticky left-12 z-30 bg-white shadow-[2px_0_0_rgba(0,0,0,0.05)]" onClick={() => handleSort('company')}>
                   <div className="flex items-center text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap group-hover:text-blue-600">Company Name <ChevronDown size={10} className="ml-1 opacity-20" /></div>
                 </th>
-                {['Person in Charge', 'Email', 'Temperature', 'Status', 'Intent', 'Next Action', 'Channel'].map((label, idx) => (
-                  <th key={label} className="py-3 px-4 group cursor-pointer" onClick={() => handleSort(['person', 'email', 'temp', 'last', 'intent', 'next', 'channel'][idx])}>
+                {['Person in Charge', 'Email', 'Location', 'Temperature', 'Status', 'Intent', 'Next Action', 'Channel'].map((label, idx) => (
+                  <th key={label} className="py-3 px-4 group cursor-pointer" onClick={() => handleSort(['person', 'email', 'location', 'temp', 'last', 'intent', 'next', 'channel'][idx])}>
                     <div className="flex items-center text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap group-hover:text-blue-600">{label} <ChevronDown size={10} className="ml-1 opacity-20" /></div>
                   </th>
                 ))}
@@ -149,6 +150,7 @@ export default function ProjectsPage() {
                   <td className="py-2.5 px-4 whitespace-nowrap sticky left-12 z-10 bg-white group-hover:bg-[#f8faff] transition-colors shadow-[2px_0_0_rgba(0,0,0,0.05)]"><span className="text-[13px] font-black text-gray-800">{proj.company}</span></td>
                   <td className="py-2.5 px-4 whitespace-nowrap font-bold text-[13px] text-gray-600">{proj.person}</td>
                   <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-blue-500/80">{proj.email}</td>
+                  <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-gray-500">{proj.location}</td>
                   <td className="py-2.5 px-4 whitespace-nowrap"><div className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider border flex items-center gap-1 w-fit ${getTempStyle(proj.temp)}`}>{proj.temp}</div></td>
                   <td className="py-2.5 px-4 whitespace-nowrap"><span className="text-[10px] font-bold text-gray-400 italic">{proj.last}</span></td>
                   <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-gray-500 max-w-[200px] truncate">{proj.intent}</td>
@@ -204,6 +206,10 @@ export default function ProjectsPage() {
                 <div className="space-y-1.5 flex flex-col items-start text-left">
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Business Email</label>
                   <input required type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" />
+                </div>
+                <div className="space-y-1.5 flex flex-col items-start text-left">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Location</label>
+                  <input value={formData.location} onChange={e => setFormData({...formData, location: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                    <div className="space-y-1.5 flex flex-col items-start text-left">

@@ -30,6 +30,9 @@ export default function TrainingPage() {
   const [referenceChatHistory, setReferenceChatHistory] = useState(true);
 
   const [productName, setProductName] = useState('');
+  const [targetCustomer, setTargetCustomer] = useState('');
+  const [productType, setProductType] = useState('Service');
+  const [location, setLocation] = useState('');
   const [description, setDescription] = useState('');
   const [benefit, setBenefit] = useState('');
   const [moreAboutProduct, setMoreAboutProduct] = useState('');
@@ -40,6 +43,7 @@ export default function TrainingPage() {
   const [uploadedFiles, setUploadedFiles] = useState<{ [key: string]: string }>({});
 
   const toneOptions = ['Default', 'Professional', 'Casual', 'Enthusiastic', 'Precise', 'Witty', 'Aggressive'];
+  const productTypeOptions = ['Service', 'Product', 'Software', 'Consulting', 'Agency', 'Other'];
 
   const AppleToggle = ({ enabled, setEnabled, label }: { enabled: boolean, setEnabled: (v: boolean) => void, label?: string }) => (
     <div className="flex items-center justify-between group cursor-pointer" onClick={() => setEnabled(!enabled)}>
@@ -60,6 +64,23 @@ export default function TrainingPage() {
         placeholder={placeholder}
         className="w-full bg-white border border-gray-100 rounded-xl px-4 py-3 text-[13px] font-bold text-gray-800 focus:ring-2 focus:ring-blue-100 focus:border-blue-200 outline-none transition-all placeholder:text-gray-300 shadow-sm"
       />
+    </div>
+  );
+
+  const FormSelect = ({ label, value, onChange, options }: any) => (
+    <div className="space-y-1.5 flex flex-col items-start w-full">
+      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{label}</label>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="w-full bg-white border border-gray-100 rounded-xl px-4 py-3 text-[13px] font-bold text-gray-800 focus:ring-2 focus:ring-blue-100 focus:border-blue-200 outline-none transition-all shadow-sm"
+      >
+        {options.map((option: string) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
     </div>
   );
 
@@ -170,18 +191,21 @@ export default function TrainingPage() {
 
 
         {/* ================= RIGHT COLUMN: Product & Services ================= */}
-        <div className="flex flex-col bg-white/80 backdrop-blur-3xl rounded-[32px] border border-white p-6 sm:p-8 shadow-[0_40px_80px_rgba(0,0,0,0.06)]">
+        <div className="flex flex-col bg-white/80 backdrop-blur-3xl rounded-[32px] border border-white p-6 sm:p-8 shadow-[0_40px_80px_rgba(0,0,0,0.06)] max-h-[calc(100vh-12rem)] overflow-hidden">
            <div className="flex items-center gap-3 mb-6 border-b border-gray-50 pb-4 flex-shrink-0">
               <div className="p-2 bg-purple-50 rounded-xl text-purple-600"><Briefcase size={20} /></div>
               <h2 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight">Product & Services</h2>
            </div>
 
-           <div className="flex flex-col gap-6">
+           <div className="flex flex-col gap-6 overflow-y-auto pr-2 custom-scrollbar">
               <FormInput label="Product Name" value={productName} onChange={setProductName} placeholder="e.g. Acme Enterprise AI" />
+              <FormInput label="Description" value={description} onChange={setDescription} placeholder="Brief summary" />
+              <FormInput label="Key Benefit" value={benefit} onChange={setBenefit} placeholder="Main selling point" />
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <FormInput label="Description" value={description} onChange={setDescription} placeholder="Brief summary" />
-                <FormInput label="Key Benefit" value={benefit} onChange={setBenefit} placeholder="Main selling point" />
+                <FormInput label="Target Customer" value={targetCustomer} onChange={setTargetCustomer} placeholder="e.g. Hotels, restaurants, clinics" />
+                <FormSelect label="Product Type" value={productType} onChange={setProductType} options={productTypeOptions} />
               </div>
+              <FormInput label="Location" value={location} onChange={setLocation} placeholder="e.g. Kuala Lumpur, Malaysia" />
 
               <div className="space-y-3 pt-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Training Assets</label>

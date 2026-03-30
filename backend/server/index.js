@@ -15,6 +15,7 @@ const messagesRouter = require('./routes/messages');
 const trainingRouter = require('./routes/training');
 const llmRouter = require('./routes/llm');
 const productsRouter = require('./routes/products');
+const scrapingRouter = require('./routes/scraping');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -35,6 +36,7 @@ app.use('/api/messages', messagesRouter);
 app.use('/api/training', trainingRouter);
 app.use('/api/llm', llmRouter);
 app.use('/api/products', productsRouter);
+app.use('/api/scraping', scrapingRouter);
 
 // API status endpoint
 app.get('/api/status', (req, res) => {

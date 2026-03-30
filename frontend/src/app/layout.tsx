@@ -1,10 +1,10 @@
-import type { Metadata } from "next";
 import "./globals.css";
 import Navbar from "../components/Navbar";
+import { Providers } from "./providers";
 
-export const metadata: Metadata = {
-  title: "Salesbot - Automated Sales Prospecting",
-  description: "Automated sales prospecting bot with AI-powered email campaigns",
+export const metadata = {
+  title: "Salesbot",
+  description: "Automated Sales Prospecting Bot",
 };
 
 export default function RootLayout({
@@ -15,8 +15,10 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
-        <Navbar />
-        {children}
+        <Providers>
+          <Navbar />
+          {children}
+        </Providers>
       </body>
     </html>
   );

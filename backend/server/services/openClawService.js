@@ -37,7 +37,7 @@ const OPENCLAW_JORDAN_BOT_NAME = process.env.OPENCLAW_JORDAN_BOT_NAME || 'Jordan
 const OPENCLAW_JORDAN_NAMESPACE = process.env.OPENCLAW_JORDAN_NAMESPACE || 'jordan-sales';
 const OPENCLAW_JORDAN_TRANSPORT = (process.env.OPENCLAW_JORDAN_TRANSPORT || 'rpc').trim().toLowerCase();
 const OPENCLAW_JORDAN_RPC_TIMEOUT_MS = Number(process.env.OPENCLAW_JORDAN_RPC_TIMEOUT_MS || 120000);
-const MAX_LEADS = 5;
+const MAX_LEADS = 6;
 
 const normalizeOpenClawLead = (lead = {}, fallbackLocation = '') => ({
   companyName: lead.companyName || lead.company || '',
@@ -183,7 +183,7 @@ const buildJordanPrompt = (productInfo = {}) => JSON.stringify({
       company: 'string',
       person: 'string',
       email: 'string',
-      phone: 'string',
+      phone: 'phone',
       location: 'string',
       intent: 'string',
       channel: 'Email|Phone|Whatsapp|LinkedIn|Other',

@@ -18,6 +18,27 @@ const { findLeadsWithOpenClaw } = require('./openClawService');
 const MAX_LEADS = 5;
 
 // ---------------------------------------------------------------------------
+// Get previously found companies for a product
+// ---------------------------------------------------------------------------
+
+async function getPreviouslyFoundCompanies(productInfoId) {
+  try {
+    const snapshot = await db
+      .collection('leads')
+      .where('productInfoId', '==', productInfoId || 'current')
+      .get();
+
+    return snapshot.docs
+      .map((doc) => doc.data().company || '')
+      .filter(Boolean)
+      .map((name) => name.toLowerCase());
+  } catch (error) {
+    console.error('Error fetching previously found companies:', error.message);
+    return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
@@ -155,11 +176,21 @@ async function upsertLead(lead) {
 // ---------------------------------------------------------------------------
 
 async function findLeadsFromProductInfo(productInfo) {
+  // Step 0: Get previously found companies to exclude from new search
+  const previousCompanies = await getPreviouslyFoundCompanies(productInfo.id || 'current');
+
   // Step 1: OpenClaw finds leads (company, person, email, phone, website, etc.)
   const openClawLeads = await findLeadsWithOpenClaw(productInfo);
 
+  // Step 1.5: Filter out any leads that were already found (dedupe)
+  const previousCompaniesLower = new Set(previousCompanies);
+  const newLeads = openClawLeads.filter((lead) => {
+    const companyNameLower = (lead.companyName || lead.company || '').toLowerCase();
+    return !previousCompaniesLower.has(companyNameLower);
+  });
+
   const candidates = dedupeByWebsite(
-    openClawLeads.map((lead) => ({
+    newLeads.map((lead) => ({
       companyName: lead.companyName || lead.company || '',
       website: lead.website || lead.url || '',
       snippet: lead.notes || lead.intent || '',

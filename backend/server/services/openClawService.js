@@ -39,7 +39,7 @@ const OPENCLAW_JORDAN_BOT_NAME = process.env.OPENCLAW_JORDAN_BOT_NAME || 'Jordan
 const OPENCLAW_JORDAN_NAMESPACE = process.env.OPENCLAW_JORDAN_NAMESPACE || 'jordan-sales';
 const OPENCLAW_JORDAN_TRANSPORT = (process.env.OPENCLAW_JORDAN_TRANSPORT || 'rpc').trim().toLowerCase();
 const OPENCLAW_JORDAN_RPC_TIMEOUT_MS = Number(process.env.OPENCLAW_JORDAN_RPC_TIMEOUT_MS || 120000);
-const MAX_LEADS = 5;
+const MAX_LEADS = 3;
 
 const normalizeOpenClawLead = (lead = {}, fallbackLocation = '') => ({
   companyName: lead.companyName || lead.company || '',
@@ -178,7 +178,8 @@ const extractLeadsFromPayload = (payload) => {
 };
 
 const buildJordanPrompt = (productInfo = {}) => JSON.stringify({
-  task: 'Find up to 5 leads that match this product and target customer profile.',
+  task: `Find up to ${MAX_LEADS} leads that match this target customer profile: "${productInfo.targetCustomer}" in "${productInfo.location}". The product is: ${productInfo.productName} (${productInfo.description})`,
+  searchDirective: `Focus on finding companies and decision-makers who fit this target customer profile: "${productInfo.targetCustomer}" located in or serving "${productInfo.location}"`,
   output: {
     instruction: 'Return ONLY strict JSON with this exact shape: {"leads":[...]} and no extra text.',
     leadShape: {
@@ -206,102 +207,60 @@ const buildJordanPrompt = (productInfo = {}) => JSON.stringify({
   productInfo,
 });
 
-async function findLeadsWithOpenClawRpc(productInfo) {
-  const wsUrl = getJordanGatewayWsUrl();
-  if (!wsUrl) return [];
-
-  const params = {
-    agentId: OPENCLAW_JORDAN_AGENT_ID || 'main',
-    idempotencyKey: `jordan-leads-${randomUUID()}`,
-    message: buildJordanPrompt(productInfo),
-    timeout: Math.ceil(OPENCLAW_JORDAN_RPC_TIMEOUT_MS / 1000),
-  };
-
-  const args = [
-    'gateway', 'call', 'agent',
-    '--json',
-    '--expect-final',
-    '--url', wsUrl,
-    '--params', JSON.stringify(params),
-  ];
-
-  if (OPENCLAW_JORDAN_GATEWAY_TOKEN) {
-    args.push('--token', OPENCLAW_JORDAN_GATEWAY_TOKEN);
+async function checkOpenClawGatewayHealth() {
+  try {
+    await execFileAsync('openclaw', ['health', '--timeout', '3000'], { timeout: 5000 });
+    return true;
+  } catch {
+    return false;
   }
-  args.push('--timeout', String(OPENCLAW_JORDAN_RPC_TIMEOUT_MS));
-
-  const { stdout } = await execFileAsync('openclaw', args, {
-    timeout: OPENCLAW_JORDAN_RPC_TIMEOUT_MS + 5000,
-    maxBuffer: 1024 * 1024 * 4,
-  });
-
-  const parsed = parseJsonObject(stdout) || {};
-  const rawLeads = extractLeadsFromPayload(parsed);
-
-  return Array.isArray(rawLeads)
-    ? rawLeads.map((lead) => normalizeOpenClawLead(lead, productInfo.location || '')).slice(0, MAX_LEADS)
-    : [];
 }
 
-async function findLeadsWithOpenClawHttp(productInfo) {
-  const gatewayUrl = getJordanGatewayUrl();
+async function findLeadsWithOpenClawRpc(productInfo) {
+  console.log(`🔍 [OPENCLAW] Checking gateway health...`);
+  const isGatewayHealthy = await checkOpenClawGatewayHealth();
 
-  if (!gatewayUrl) {
+  if (!isGatewayHealthy) {
+    console.log(`⛔ [OPENCLAW] Gateway not responding — skipping OpenClaw search`);
     return [];
   }
 
-  try {
-    const response = await axios.post(
-      gatewayUrl,
-      {
-        context: {
-          agentId: OPENCLAW_JORDAN_AGENT_ID,
-          workflowId: OPENCLAW_JORDAN_WORKFLOW_ID,
-          botName: OPENCLAW_JORDAN_BOT_NAME,
-          namespace: OPENCLAW_JORDAN_NAMESPACE,
-        },
-        productInfo,
-        constraints: {
-          maxLeads: MAX_LEADS,
-          displayFieldsOnly: ['company', 'person', 'email', 'location', 'temp', 'status', 'intent', 'next', 'channel'],
-        },
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          ...(OPENCLAW_JORDAN_API_KEY ? { Authorization: `Bearer ${OPENCLAW_JORDAN_API_KEY}` } : {}),
-          ...(OPENCLAW_JORDAN_GATEWAY_TOKEN ? { 'x-gateway-token': OPENCLAW_JORDAN_GATEWAY_TOKEN } : {}),
-          ...(OPENCLAW_JORDAN_GATEWAY_TOKEN ? { 'x-openclaw-token': OPENCLAW_JORDAN_GATEWAY_TOKEN } : {}),
-        },
-        timeout: 30000,
-      }
-    );
+  console.log(`✅ [OPENCLAW] Gateway is responsive, sending search request...`);
 
-    const rawLeads = response.data?.leads || response.data?.data?.leads || response.data?.results || [];
+  const message = buildJordanPrompt(productInfo);
+  const args = [
+    'agent',
+    '--message', message,
+    '--agent', OPENCLAW_JORDAN_AGENT_ID || 'main',
+    '--json',
+    '--timeout', String(Math.ceil(OPENCLAW_JORDAN_RPC_TIMEOUT_MS / 1000)),
+  ];
+
+  try {
+    const { stdout } = await execFileAsync('openclaw', args, {
+      timeout: OPENCLAW_JORDAN_RPC_TIMEOUT_MS + 5000,
+      maxBuffer: 1024 * 1024 * 4,
+    });
+
+    const parsed = parseJsonObject(stdout) || {};
+    const rawLeads = extractLeadsFromPayload(parsed);
+
+    if (Array.isArray(rawLeads) && rawLeads.length > 0) {
+      console.log(`✅ [OPENCLAW] Found ${rawLeads.length} lead(s)`);
+    }
+
     return Array.isArray(rawLeads)
       ? rawLeads.map((lead) => normalizeOpenClawLead(lead, productInfo.location || '')).slice(0, MAX_LEADS)
       : [];
   } catch (error) {
-    console.error('OpenClaw HTTP lead search failed:', error.response?.data || error.message);
+    console.log(`⛔ [OPENCLAW] Search failed: ${error.message}`);
     return [];
   }
 }
 
+
 async function findLeadsWithOpenClaw(productInfo) {
-  if (!OPENCLAW_JORDAN_GATEWAY_BASE_URL && !OPENCLAW_JORDAN_AGENT_URL) {
-    return [];
-  }
-
-  if (OPENCLAW_JORDAN_TRANSPORT === 'http') {
-    return findLeadsWithOpenClawHttp(productInfo);
-  }
-
-  try {
-    return await findLeadsWithOpenClawRpc(productInfo);
-  } catch (error) {
-    console.error('OpenClaw RPC lead search failed:', error.message);
-    return findLeadsWithOpenClawHttp(productInfo);
-  }
+  return findLeadsWithOpenClawRpc(productInfo);
 }
 
 module.exports = {

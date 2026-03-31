@@ -17,6 +17,7 @@ const llmRouter = require('./routes/llm');
 const productsRouter = require('./routes/products');
 const productInfoRouter = require('./routes/productInfo');
 const scrapingRouter = require('./routes/scraping');
+const { initializeSystem } = require('./services/initializationService');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -54,11 +55,16 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Salesbot Backend running on http://localhost:${PORT}`);
-  console.log(`📋 Health check: http://localhost:${PORT}/health`);
-  console.log(`🗄️  Firestore connected to project: ${process.env.FIREBASE_PROJECT_ID}`);
-});
+// Initialize system and start server
+(async () => {
+  // Initialize product info (non-blocking, won't crash server if Firebase unavailable)
+  await initializeSystem();
+
+  app.listen(PORT, () => {
+    console.log(`🚀 Salesbot Backend running on http://localhost:${PORT}`);
+    console.log(`📋 Health check: http://localhost:${PORT}/health`);
+    console.log(`🗄️  Firestore connected to project: ${process.env.FIREBASE_PROJECT_ID}`);
+  });
+})();
 
 module.exports = app;

@@ -6,21 +6,14 @@
 const admin = require('firebase-admin');
 require('dotenv').config();
 
-// Reconstruct the private key with proper headers.
-// Strip any stray leading/trailing quotes that dotenv may leave when the
-// .env value has an opening " but a missing closing " on the same line.
-const rawPrivateKey = (process.env.FIREBASE_PRIVATE_KEY || '')
-  .replace(/^["']/, '')
-  .replace(/["']$/, '');
-const privateKey = rawPrivateKey.includes('-----BEGIN')
-  ? rawPrivateKey.replace(/\\n/g, '\n')
-  : `-----BEGIN PRIVATE KEY-----\n${rawPrivateKey.replace(/\\n/g, '\n')}\n-----END PRIVATE KEY-----`;
+// Parse the private key, handling both escaped and actual newlines
+const rawPrivateKey = (process.env.FIREBASE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 
 const serviceAccount = {
   type: "service_account",
   project_id: process.env.FIREBASE_PROJECT_ID,
   private_key_id: "",
-  private_key: privateKey,
+  private_key: rawPrivateKey,
   client_email: process.env.FIREBASE_CLIENT_EMAIL,
   client_id: "",
   auth_uri: "https://accounts.google.com/o/oauth2/auth",

@@ -36,8 +36,8 @@ const OPENCLAW_JORDAN_WORKFLOW_ID = process.env.OPENCLAW_JORDAN_WORKFLOW_ID || '
 const OPENCLAW_JORDAN_BOT_NAME = process.env.OPENCLAW_JORDAN_BOT_NAME || 'Jordan';
 const OPENCLAW_JORDAN_NAMESPACE = process.env.OPENCLAW_JORDAN_NAMESPACE || 'jordan-sales';
 const OPENCLAW_JORDAN_TRANSPORT = (process.env.OPENCLAW_JORDAN_TRANSPORT || 'rpc').trim().toLowerCase();
-const OPENCLAW_JORDAN_RPC_TIMEOUT_MS = Number(process.env.OPENCLAW_JORDAN_RPC_TIMEOUT_MS || 120000);
-const MAX_LEADS = 10;
+const OPENCLAW_JORDAN_RPC_TIMEOUT_MS = Number(process.env.OPENCLAW_JORDAN_RPC_TIMEOUT_MS || 300000); // 5 minutes for expanded geographic search
+const MAX_LEADS = 100; // Per-batch limit - reasonable for OpenClaw to handle reliably
 
 const normalizeOpenClawLead = (lead = {}, fallbackLocation = '') => ({
   companyName: lead.companyName || lead.company || '',
@@ -51,17 +51,27 @@ const normalizeOpenClawLead = (lead = {}, fallbackLocation = '') => ({
 });
 
 const getJordanGatewayUrl = () => {
+  let url = '';
+  
   if (OPENCLAW_JORDAN_AGENT_URL) {
-    return OPENCLAW_JORDAN_AGENT_URL;
-  }
-
-  if (!OPENCLAW_JORDAN_GATEWAY_BASE_URL) {
+    url = OPENCLAW_JORDAN_AGENT_URL;
+  } else if (OPENCLAW_JORDAN_GATEWAY_BASE_URL) {
+    const base = OPENCLAW_JORDAN_GATEWAY_BASE_URL.replace(/\/$/, '');
+    const path = OPENCLAW_JORDAN_ENDPOINT.startsWith('/') ? OPENCLAW_JORDAN_ENDPOINT : `/${OPENCLAW_JORDAN_ENDPOINT}`;
+    url = `${base}${path}`;
+  } else {
     return '';
   }
 
-  const base = OPENCLAW_JORDAN_GATEWAY_BASE_URL.replace(/\/$/, '');
-  const path = OPENCLAW_JORDAN_ENDPOINT.startsWith('/') ? OPENCLAW_JORDAN_ENDPOINT : `/${OPENCLAW_JORDAN_ENDPOINT}`;
-  return `${base}${path}`;
+  // Convert WebSocket URLs to HTTP for HTTP transport
+  if (url.startsWith('ws://')) {
+    return url.replace(/^ws:\/\//, 'http://');
+  }
+  if (url.startsWith('wss://')) {
+    return url.replace(/^wss:\/\//, 'https://');
+  }
+  
+  return url;
 };
 
 const getJordanGatewayWsUrl = () => {
@@ -175,8 +185,23 @@ const extractLeadsFromPayload = (payload) => {
   return [];
 };
 
-const buildJordanPrompt = (productInfo = {}) => JSON.stringify({
-  task: `Find up to ${MAX_LEADS} leads that match this product and target customer profile. IMPORTANT: Return DIVERSE companies from DIFFERENT chains/brands, not multiple locations of the same company (e.g., don't return Hotel 99 Pudu AND Hotel 99 Sri Petaling together - return different hotel chains).`,
+const buildJordanPrompt = (productInfo = {}, previousCompanies = []) => JSON.stringify({
+  task: `Find up to ${MAX_LEADS} leads that match this product and target customer profile. Return diverse results from different companies, locations, and regions.`,
+  searchStrategy: {
+    diversification: 'CRITICAL: If you find the initial set of companies/locations exhausted, expand to other regions. For Malaysia: search beyond Kuala Lumpur (Selangor, Penang, Johor, Sabah, Sarawak). For hospitality: search resorts, guesthouses, vacation rentals, boutique accommodations. For retail: search different districts and shopping centers. For corporate: search different industries and company sizes.',
+    geographicExpansion: 'If searching Malaysia, expand to: Selangor, Subang Jaya, Petaling Jaya, Shah Alam, Kuching, George Town, Johor Bahru, Kota Kinabalu, Ipoh, Melaka beyond the primary location.',
+    minLeads: 50,
+    targetLeads: MAX_LEADS,
+  },
+  exclusions: previousCompanies.length > 0 
+    ? { 
+        previouslyFoundCompanies: previousCompanies,
+        instruction: `CRITICAL - DO NOT RETURN ANY OF THESE COMPANIES: ${previousCompanies.join(', ')}. Find completely different companies, locations, and regions. These have already been contacted. Search aggressively in new areas, different business types if applicable, and alternate locations.`
+      }
+    : { 
+        previouslyFoundCompanies: [],
+        instruction: 'No exclusions - search broadly for diverse leads across multiple locations and business types.'
+      },
   output: {
     instruction: 'Return ONLY strict JSON with this exact shape: {"leads":[...]} and no extra text.',
     leadShape: {
@@ -193,8 +218,6 @@ const buildJordanPrompt = (productInfo = {}) => JSON.stringify({
       maxLeads: MAX_LEADS,
       preferPublicBusinessContacts: true,
       noFabrication: true,
-      diverseCompanies: 'Return results from different companies/brands, not just different locations of the same company chain',
-      excludeDuplicates: 'Do not return multiple locations of the same company (e.g., Hotel 99 in different cities). Focus on unique companies.',
     },
   },
   context: {
@@ -206,19 +229,19 @@ const buildJordanPrompt = (productInfo = {}) => JSON.stringify({
   productInfo,
 });
 
-async function findLeadsWithOpenClawCliViaSsh(productInfo) {
+async function findLeadsWithOpenClawCliViaSsh(productInfo, previousCompanies = []) {
   const wsUrl = getJordanGatewayWsUrl();
   if (!wsUrl) {
     console.error('[OpenClaw] No gateway URL configured');
     return [];
   }
 
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     try {
       const params = {
         agentId: OPENCLAW_JORDAN_AGENT_ID || 'main',
         idempotencyKey: `jordan-leads-${randomUUID()}`,
-        message: buildJordanPrompt(productInfo),
+        message: buildJordanPrompt(productInfo, previousCompanies),
         timeout: Math.ceil(OPENCLAW_JORDAN_RPC_TIMEOUT_MS / 1000),
       };
 
@@ -260,27 +283,27 @@ async function findLeadsWithOpenClawCliViaSsh(productInfo) {
 
       // Handle process completion
       sshProcess.on('close', (code) => {
-        if (code !== 0) {
-          // Check for SSH auth failures
-          if (code === 255 || stderr.includes('Permission denied') || stderr.includes('Authentications that can continue')) {
+        // Check for SSH auth failures or non-zero exit codes
+        if (code === 255 || code !== 0 || stderr.includes('Permission denied') || stderr.includes('Authentications that can continue')) {
+          if (code === 255 || stderr.includes('Permission denied')) {
             console.error('[OpenClaw] ❌ SSH key-based auth is required for OpenClaw stdin piping');
             console.error('[OpenClaw] Setup SSH key with: ssh-copy-id jeff@192.168.100.199');
             console.error('[OpenClaw] Test with: ssh -o BatchMode=yes jeff@192.168.100.199 "echo ok"');
-            resolve([]);
-            return;
+          } else {
+            console.error('[OpenClaw] Remote command failed with exit code:', code);
+            if (stderr) {
+              console.error('[OpenClaw] stderr:', stderr.slice(0, 500));
+            }
           }
-
-          console.error('[OpenClaw] Remote command failed with exit code:', code);
-          if (stderr) {
-            console.error('[OpenClaw] stderr:', stderr.slice(0, 500));
-          }
-          resolve([]);
+          console.log('[OpenClaw] ⚠️ SSH failed, falling back to HTTP gateway...');
+          reject(new Error('SSH command failed: ' + (stderr.split('\n')[0] || `exit code ${code}`)));
           return;
         }
 
         if (!stdout) {
           console.error('[OpenClaw] No output received from remote command');
-          resolve([]);
+          console.log('[OpenClaw] ⚠️ No output, falling back to HTTP gateway...');
+          reject(new Error('SSH: No output received'));
           return;
         }
 
@@ -290,7 +313,8 @@ async function findLeadsWithOpenClawCliViaSsh(productInfo) {
 
           if (!parsed) {
             console.error('[OpenClaw] Failed to parse JSON response');
-            resolve([]);
+            console.log('[OpenClaw] ⚠️ Parse error, falling back to HTTP gateway...');
+            reject(new Error('SSH: Failed to parse response'));
             return;
           }
 
@@ -304,14 +328,16 @@ async function findLeadsWithOpenClawCliViaSsh(productInfo) {
           resolve(leads);
         } catch (parseError) {
           console.error('[OpenClaw] Error parsing response:', parseError.message);
-          resolve([]);
+          console.log('[OpenClaw] ⚠️ Parse exception, falling back to HTTP gateway...');
+          reject(new Error('SSH: Parse error - ' + parseError.message));
         }
       });
 
       // Handle process errors
       sshProcess.on('error', (error) => {
         console.error('[OpenClaw] SSH spawn error:', error.message);
-        resolve([]);
+        console.log('[OpenClaw] ⚠️ SSH error, falling back to HTTP gateway...');
+        reject(new Error('SSH spawn failed: ' + error.message));
       });
 
       // Send params JSON to stdin
@@ -321,17 +347,21 @@ async function findLeadsWithOpenClawCliViaSsh(productInfo) {
 
     } catch (error) {
       console.error('[OpenClaw] Unexpected error:', error.message);
-      resolve([]);
+      console.log('[OpenClaw] ⚠️ Unexpected error, falling back to HTTP gateway...');
+      reject(new Error('SSH setup failed: ' + error.message));
     }
   });
 }
 
-async function findLeadsWithOpenClawHttp(productInfo) {
+async function findLeadsWithOpenClawHttp(productInfo, previousCompanies = []) {
   const gatewayUrl = getJordanGatewayUrl();
 
   if (!gatewayUrl) {
+    console.error('[OpenClaw] No HTTP gateway URL configured');
     return [];
   }
+
+  console.log('[OpenClaw] HTTP gateway URL:', gatewayUrl);
 
   try {
     const response = await axios.post(
@@ -344,9 +374,11 @@ async function findLeadsWithOpenClawHttp(productInfo) {
           namespace: OPENCLAW_JORDAN_NAMESPACE,
         },
         productInfo,
+        previousCompanies,
         constraints: {
           maxLeads: MAX_LEADS,
           displayFieldsOnly: ['company', 'person', 'email', 'location', 'temp', 'status', 'intent', 'next', 'channel'],
+          excludePreviouslySearched: previousCompanies.length > 0 ? `CRITICAL - DO NOT RETURN ANY OF THESE: ${previousCompanies.join(', ')}. Find completely different companies.` : 'None',
         },
       },
       {
@@ -361,29 +393,45 @@ async function findLeadsWithOpenClawHttp(productInfo) {
     );
 
     const rawLeads = response.data?.leads || response.data?.data?.leads || response.data?.results || [];
+    console.log('[OpenClaw] HTTP response leads count:', rawLeads.length);
     return Array.isArray(rawLeads)
       ? rawLeads.map((lead) => normalizeOpenClawLead(lead, productInfo.location || '')).slice(0, MAX_LEADS)
       : [];
   } catch (error) {
-    console.error('OpenClaw HTTP lead search failed:', error.response?.data || error.message);
+    console.error('[OpenClaw] HTTP error:', error.message);
+    if (error.response) {
+      console.error('[OpenClaw] Response status:', error.response.status);
+      console.error('[OpenClaw] Response data:', JSON.stringify(error.response.data).slice(0, 500));
+    }
     return [];
   }
 }
 
-async function findLeadsWithOpenClaw(productInfo) {
+async function findLeadsWithOpenClaw(productInfo, previousCompanies = []) {
   if (!OPENCLAW_JORDAN_GATEWAY_BASE_URL && !OPENCLAW_JORDAN_AGENT_URL) {
+    console.warn('[OpenClaw] ⚠️ No gateway configured, unable to search for leads');
     return [];
   }
 
   if (OPENCLAW_JORDAN_TRANSPORT === 'http') {
-    return findLeadsWithOpenClawHttp(productInfo);
+    console.log('[OpenClaw] Using HTTP transport');
+    return findLeadsWithOpenClawHttp(productInfo, previousCompanies);
   }
 
+  // Try SSH first, then HTTP fallback
   try {
-    return await findLeadsWithOpenClawCliViaSsh(productInfo);
-  } catch (error) {
-    console.error('OpenClaw CLI call failed:', error.message);
-    return findLeadsWithOpenClawHttp(productInfo);
+    console.log('[OpenClaw] Attempting SSH transport (primary)...');
+    return await findLeadsWithOpenClawCliViaSsh(productInfo, previousCompanies);
+  } catch (sshError) {
+    console.warn(`[OpenClaw] SSH transport failed: ${sshError.message}`);
+    console.log('[OpenClaw] Attempting HTTP transport (fallback)...');
+    try {
+      return await findLeadsWithOpenClawHttp(productInfo, previousCompanies);
+    } catch (httpError) {
+      console.error(`[OpenClaw] HTTP transport also failed: ${httpError.message}`);
+      console.error('[OpenClaw] ❌ All OpenClaw transports failed, no leads found');
+      return [];
+    }
   }
 }
 

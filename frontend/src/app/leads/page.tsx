@@ -1,6 +1,6 @@
 "use client";
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Search, Filter, Play, Pause, Plus, FileUp, Edit3, Check, ChevronUp, ChevronDown, X, Mail, MessageCircle, Send, ChevronRight } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { Search, Filter, Play, Pause, Plus, FileUp, Edit3, Check, ChevronUp, ChevronDown, X, Mail, MessageCircle, Send, ChevronRight, Loader } from 'lucide-react';
 
 const API_BASE_URL = 'http://localhost:5000/api';
 
@@ -13,6 +13,11 @@ export default function ProjectsPage() {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [offset, setOffset] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMoreLeads, setHasMoreLeads] = useState(false);
+  const [progress, setProgress] = useState<any>({ status: 'idle' });
+  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add');
@@ -20,18 +25,50 @@ export default function ProjectsPage() {
     company: '', person: '', email: '', phone: '', whatsapp: '', location: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email'
   });
 
-  const loadLeads = async () => {
-    setLoading(true);
+  const startProgressTracking = () => {
+    // Poll every 500ms during active search
+    progressIntervalRef.current = setInterval(async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/progress/current`);
+        if (response.ok) {
+          const progressData = await response.json();
+          setProgress(progressData);
+        }
+      } catch (err) {
+        // Silent fail, not critical
+      }
+    }, 500);
+  };
+
+  const stopProgressTracking = () => {
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+  };
+
+  const loadLeads = useCallback(async (pageOffset = 0, append = false) => {
+    if (!append) setLoading(true);
+    setLoadingMore(append);
     setError('');
+    
+    // Start tracking progress
+    startProgressTracking();
 
     try {
-      const response = await fetch(`${API_BASE_URL}/leads`);
+      const endpoint = pageOffset > 0 ? `${API_BASE_URL}/scraping/find-leads?offset=${pageOffset}` : `${API_BASE_URL}/leads`;
+      const response = await fetch(endpoint, {
+        method: pageOffset > 0 ? 'POST' : 'GET',
+        headers: pageOffset > 0 ? { 'Content-Type': 'application/json' } : {},
+        body: pageOffset > 0 ? JSON.stringify({ offset: pageOffset }) : undefined,
+      });
+      
       if (!response.ok) {
         throw new Error('Failed to load leads');
       }
 
       const result = await response.json();
-      const rows = (result.data || []).map((lead: any) => ({
+      const newRows = (result.data?.leads || result.data || []).map((lead: any) => ({
         id: String(lead.id),
         company: lead.companyName || lead.company || 'Unknown Company',
         person: lead.person || '',
@@ -46,18 +83,29 @@ export default function ProjectsPage() {
         next: lead.next || lead.nextAction || 'Follow Up',
         channel: lead.channel || 'Email',
       }));
-      setProjects(rows);
+      
+      setProjects(append ? (prevProjects) => [...prevProjects, ...newRows] : newRows);
+      setOffset(pageOffset);
+      setHasMoreLeads(newRows.length >= 10); // Show "Load More" if we got a full page (10 leads)
     } catch (loadError) {
       console.error(loadError);
       setError('Could not load leads from the backend.');
     } finally {
       setLoading(false);
+      setLoadingMore(false);
+      stopProgressTracking();
+      setProgress({ status: 'idle' });
     }
+  }, []);
+
+  const handleLoadMore = () => {
+    loadLeads(offset + 10, true); // Load next 10 (append mode)
   };
 
   useEffect(() => {
     loadLeads();
-  }, []);
+    return () => stopProgressTracking(); // Cleanup on unmount
+  }, [loadLeads]);
 
   const filteredProjects = useMemo(() => {
     let items = projects.filter(proj => 
@@ -186,6 +234,41 @@ export default function ProjectsPage() {
         </div>
       </div>
 
+      {/* Progress Status Bar */}
+      {progress.status !== 'idle' && (
+        <div className={`mb-4 p-3 rounded-lg border flex items-center gap-3 z-10 ${
+          progress.status === 'error' 
+            ? 'bg-red-50 border-red-200' 
+            : progress.status === 'complete'
+            ? 'bg-green-50 border-green-200'
+            : 'bg-blue-50 border-blue-200'
+        }`}>
+          {progress.status !== 'complete' && progress.status !== 'error' && (
+            <Loader size={16} className={`${progress.status === 'searching' ? 'animate-spin text-blue-600' : 'animate-pulse text-amber-600'}`} />
+          )}
+          <div className="flex-1">
+            <p className={`text-[13px] font-bold ${
+              progress.status === 'error' 
+                ? 'text-red-700' 
+                : progress.status === 'complete'
+                ? 'text-green-700'
+                : 'text-blue-700'
+            }`}>
+              {progress.status === 'searching' && '🔍 Searching for leads...'}
+              {progress.status === 'enriching' && `📊 ${progress.message || 'Enriching leads...'}`}
+              {progress.status === 'loading' && '📚 Loading previous data...'}
+              {progress.status === 'complete' && `✅ Found ${progress.leadsFound || 0} leads`}
+              {progress.status === 'error' && `❌ ${progress.message || 'Error during search'}`}
+            </p>
+            {progress.progress && progress.total && (
+              <p className="text-[11px] text-gray-600 mt-1">
+                Progress: {progress.progress} / {progress.total}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 bg-white/80 backdrop-blur-md rounded-[24px] border border-gray-100 shadow-sm overflow-hidden flex flex-col min-h-[550px] z-10">
         <div ref={scrollContainerRef} className="overflow-x-auto overflow-y-auto flex-1 relative custom-scrollbar">
           {loading ? (
@@ -239,10 +322,10 @@ export default function ProjectsPage() {
                         </div>
                       </div>
                     ) : (
-                      <span className="text-gray-400 text-[11px]">No contact</span>
+                      <span className="text-gray-400 text-[11px]">-</span>
                     )}
                   </td>
-                  <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-blue-500/80">{proj.email || 'No email found'}</td>
+                  <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-blue-500/80">{proj.email || '-'}</td>
                   <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-gray-500">{proj.location}</td>
                   <td className="py-2.5 px-4 whitespace-nowrap"><div className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider border flex items-center gap-1 w-fit ${getTempStyle(proj.temp)}`}>{proj.temp}</div></td>
                   <td className="py-2.5 px-4 whitespace-nowrap"><span className="text-[10px] font-bold text-gray-400 italic">{proj.last}</span></td>
@@ -269,6 +352,11 @@ export default function ProjectsPage() {
             <button disabled={selectedProjects.length === 0} onClick={handleEdit} className={`flex items-center gap-2 bg-white border border-gray-100 px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all transform hover:-translate-y-1 ${selectedProjects.length === 0 ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
               <Edit3 size={16} className="text-purple-500" /> Edit List
             </button>
+            {hasMoreLeads && (
+              <button onClick={handleLoadMore} disabled={loadingMore} className="flex items-center gap-2 bg-green-600 text-white px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-bold shadow-xl hover:bg-green-700 transition-all transform hover:-translate-y-1 disabled:opacity-50">
+                <ChevronDown size={14} /> {loadingMore ? 'Loading...' : 'Load More'}
+              </button>
+            )}
           </div>
           <button onClick={() => setIsOutreachActive(!isOutreachActive)} className={`${isOutreachActive ? 'bg-orange-500' : 'bg-blue-600'} text-white px-6 sm:px-8 py-2.5 sm:py-3 rounded-[24px] font-black text-[11px] sm:text-[12px] tracking-widest flex items-center gap-2 sm:gap-3 hover:-translate-y-1 shadow-lg transition-all group`}>
             {isOutreachActive ? <><Pause size={16} fill="white" /> PAUSE OUTREACH</> : <><Play size={16} fill="white" /> START OUTREACH</>}

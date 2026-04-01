@@ -18,6 +18,7 @@ const productsRouter = require('./routes/products');
 const productInfoRouter = require('./routes/productInfo');
 const scrapingRouter = require('./routes/scraping');
 const { initializeSystem } = require('./services/initializationService');
+const { getProgress } = require('./services/progressService');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -29,6 +30,13 @@ app.use(express.json({ limit: '100mb' }));
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'salesbot-backend' });
+});
+
+// Progress tracking endpoint for frontend to poll
+app.get('/api/progress/:productInfoId?', (req, res) => {
+  const productInfoId = req.params.productInfoId || 'current';
+  const progress = getProgress(productInfoId);
+  res.json(progress);
 });
 
 // API Routes
@@ -68,3 +76,4 @@ app.get('/api/status', (req, res) => {
 })();
 
 module.exports = app;
+

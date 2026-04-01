@@ -8,12 +8,16 @@
  * 5. Extract email/phone from search results
  */
 
+const { updateProgress } = require('./progressService');
+
+
 const { chromium } = require('playwright');
 const axios = require('axios');
 const { db } = require('../config/firebase');
 const { findLeadsWithOpenClaw } = require('./openClawService');
 
-const MAX_LEADS = 10;
+const MAX_LEADS = 50; // Leads returned per page (pagination) - allows pagination through hundreds
+const SEARCH_BATCH_SIZE = 100; // Batch size for OpenClaw to find per search
 const SERPAPI_API_KEY = process.env.SERPAPI_API_KEY;
 
 // ---------------------------------------------------------------------------
@@ -43,12 +47,21 @@ async function getPreviouslyFoundCompanies(productInfoId) {
 
 const dedupeByWebsite = (items = []) => {
   const seen = new Set();
-  return items.filter((item) => {
+  const filtered = items.filter((item) => {
     const key = (item.website || item.url || item.companyName || '').toLowerCase();
-    if (!key || seen.has(key)) return false;
+    if (!key) {
+      console.log(`[Dedup] Removing "${item.companyName}" - no website/URL/name`);
+      return false;
+    }
+    if (seen.has(key)) {
+      console.log(`[Dedup] Removing "${item.companyName}" - duplicate website: ${key}`);
+      return false;
+    }
     seen.add(key);
     return true;
   });
+  console.log(`[Dedup by Website] ${items.length} → ${filtered.length} items`);
+  return filtered;
 };
 
 const extractCompanyChain = (companyName = '') => {
@@ -61,12 +74,21 @@ const extractCompanyChain = (companyName = '') => {
 
 const dedupeByCompanyChain = (items = []) => {
   const seen = new Set();
-  return items.filter((item) => {
+  const filtered = items.filter((item) => {
     const chainKey = extractCompanyChain(item.companyName || item.company || '');
-    if (!chainKey || seen.has(chainKey)) return false;
+    if (!chainKey) {
+      console.log(`[Dedup] Removing "${item.companyName}" - no chain key`);
+      return false;
+    }
+    if (seen.has(chainKey)) {
+      console.log(`[Dedup] Removing "${item.companyName}" - duplicate chain: ${chainKey}`);
+      return false;
+    }
     seen.add(chainKey);
     return true;
   });
+  console.log(`[Dedup by Chain] ${items.length} → ${filtered.length} items`);
+  return filtered;
 };
 
 const extractWhatsAppNumber = (whatsappLink = '') => {
@@ -155,6 +177,14 @@ async function extractPageContacts(page, url, companyName = '', location = '') {
 
       const textEmails = text.match(emailRegex) || [];
       const textPhones = text.match(phoneRegex) || [];
+      
+      // Extract WhatsApp-labeled phone numbers from text (e.g., "WhatsApp: +60 16-211 7281")
+      const whatsappTextRegex = /WhatsApp[\s:]*(\+?6?0\d{1,2}[\s.-]?\d{3,4}[\s.-]?\d{3,4}|\+\d{1,3}[\s.-]?\d{1,4}[\s.-]?\d{1,4}[\s.-]?\d{1,9})/gi;
+      const whatsappTextMatches = [];
+      let match;
+      while ((match = whatsappTextRegex.exec(text)) !== null) {
+        if (match[1]) whatsappTextMatches.push(match[1]);
+      }
 
       // Prioritize non-generic emails
       const allEmails = [...new Set([...mailtoEmails, ...textEmails])];
@@ -173,11 +203,13 @@ async function extractPageContacts(page, url, companyName = '', location = '') {
       const sortedEmails = scoredEmails.sort((a, b) => b.score - a.score).map(e => e.email).slice(0, 5);
 
       // Deduplicate and clean phone numbers, reject dates
-      const uniquePhones = [...new Set([...telPhones, ...textPhones])];
+      // Separate WhatsApp phones from regular phones
+      const allPhones = [...new Set([...telPhones, ...textPhones])];
+      const whatsappPhones = [...new Set(whatsappTextMatches)];
       
       // Remove duplicates with different formatting and filter out date patterns
       const dateOnlyRegex = /^\d{4}-\d{2}-\d{2}$|^\d{1,2}\/\d{1,2}\/\d{2,4}$/;
-      const cleanPhones = uniquePhones.filter((phone, idx, arr) => {
+      const cleanPhones = allPhones.filter((phone, idx, arr) => {
         // Skip if it's just a date
         if (dateOnlyRegex.test(phone)) return false;
         // Skip if contains mostly letters (like month names "April-01")
@@ -192,17 +224,35 @@ async function extractPageContacts(page, url, companyName = '', location = '') {
           return p.replace(/\D/g, '') === normalized;
         });
       }).slice(0, 5);
+      
+      // Clean WhatsApp phones same way
+      const cleanWhatsAppPhones = whatsappPhones.filter((phone, idx, arr) => {
+        // Skip if it's just a date
+        if (dateOnlyRegex.test(phone)) return false;
+        // Skip if contains mostly letters
+        if (/[A-Za-z]{3,}/.test(phone)) return false;
+        
+        const normalized = phone.replace(/\D/g, '');
+        // Must have at least 8 digits to be a valid phone
+        if (normalized.length < 8) return false;
+        
+        return idx === arr.findIndex(p => {
+          if (dateOnlyRegex.test(p) || /[A-Za-z]{3,}/.test(p)) return false;
+          return p.replace(/\D/g, '') === normalized;
+        });
+      }).slice(0, 3);
 
       return {
         emails: sortedEmails,
         phones: cleanPhones,
+        whatsappPhones: cleanWhatsAppPhones,
         whatsappLinks: [...new Set(whatsappLinks)].slice(0, 3),
         socialLinks: [...new Set(socialLinks)].slice(0, 5),
       };
     }, { companyName, location });
   } catch (error) {
     console.error(`Failed scraping ${url}:`, error.message);
-    return { emails: [], phones: [], whatsappLinks: [], socialLinks: [] };
+    return { emails: [], phones: [], whatsappPhones: [], whatsappLinks: [], socialLinks: [] };
   }
 }
 
@@ -233,13 +283,14 @@ async function scrapeCompanyWebsite(url, companyName = '', location = '') {
       `${base}/reserve`,
     ];
     
-    const contacts = { emails: [], phones: [], whatsappLinks: [], socialLinks: [] };
+    const contacts = { emails: [], phones: [], whatsappPhones: [], whatsappLinks: [], socialLinks: [] };
 
     for (const pageUrl of [...new Set(candidatePages)]) {
       try {
         const pageContacts = await extractPageContacts(page, pageUrl, companyName, location);
         contacts.emails.push(...pageContacts.emails);
         contacts.phones.push(...pageContacts.phones);
+        contacts.whatsappPhones.push(...pageContacts.whatsappPhones);
         contacts.whatsappLinks.push(...pageContacts.whatsappLinks);
         contacts.socialLinks.push(...pageContacts.socialLinks);
       } catch (e) {
@@ -251,12 +302,13 @@ async function scrapeCompanyWebsite(url, companyName = '', location = '') {
     return {
       emails: [...new Set(contacts.emails)].slice(0, 5),
       phones: [...new Set(contacts.phones)].filter(phone => isValidPhoneNumber(phone)).slice(0, 5),
+      whatsappPhones: [...new Set(contacts.whatsappPhones)].filter(phone => isValidPhoneNumber(phone)).slice(0, 3),
       whatsappLinks: [...new Set(contacts.whatsappLinks)].slice(0, 3),
       socialLinks: [...new Set(contacts.socialLinks)].slice(0, 5),
     };
   } catch (error) {
     console.error(`Website scraping failed for ${url}:`, error.message);
-    return { emails: [], phones: [], whatsappLinks: [], socialLinks: [] };
+    return { emails: [], phones: [], whatsappPhones: [], whatsappLinks: [], socialLinks: [] };
   } finally {
     if (browser) await browser.close().catch(() => {});
   }
@@ -424,96 +476,150 @@ async function upsertLead(lead) {
 // Main lead finding pipeline
 // ---------------------------------------------------------------------------
 
-async function findLeadsFromProductInfo(productInfo) {
-  // Step 0: Get previously found companies to exclude from new search
-  const previousCompanies = await getPreviouslyFoundCompanies(productInfo.id || 'current');
+async function findLeadsFromProductInfo(productInfo, offset = 0) {
+  const productId = productInfo.id || 'current';
+  
+  try {
+    // Step 0: Get previously found companies to exclude from new search
+    updateProgress(productId, 'loading', { message: 'Loading previous searches...' });
+    const previousCompanies = await getPreviouslyFoundCompanies(productId);
+    console.log(`[Previous] Found ${previousCompanies.length} previously saved companies: ${previousCompanies.slice(0, 5).join(', ')}${previousCompanies.length > 5 ? '...' : ''}`);
 
-  // Step 1: OpenClaw finds leads (company, person, email, phone, website, etc.)
-  const openClawLeads = await findLeadsWithOpenClaw(productInfo);
-
-  // Step 1.5: Filter out any leads that were already found (dedupe)
-  const previousCompaniesLower = new Set(previousCompanies);
-  const newLeads = openClawLeads.filter((lead) => {
-    const companyNameLower = (lead.companyName || lead.company || '').toLowerCase();
-    return !previousCompaniesLower.has(companyNameLower);
-  });
-
-  const candidates = dedupeByCompanyChain(
-    dedupeByWebsite(
-      newLeads.map((lead) => ({
-        companyName: lead.companyName || lead.company || '',
-        website: lead.website || lead.url || '',
-        snippet: lead.notes || lead.intent || '',
-        source: 'openclaw',
-        location: lead.location || productInfo.location || '',
-        email: lead.email || '',
-        phone: lead.phone || '',
-        contactName: lead.contactName || lead.person || '',
-        channel: lead.channel || '',
-      }))
-    )
-  ).slice(0, MAX_LEADS);
-
-  const discoveredLeads = [];
-
-  for (const candidate of candidates) {
-    if (discoveredLeads.length >= MAX_LEADS) break;
-
-    // Step 2: Enrich with Playwright only when contact info is incomplete
-    const missingContact = !candidate.email && !candidate.phone;
-    let scraped = { emails: [], phones: [], whatsappLinks: [], socialLinks: [] };
-    
-    if (candidate.website && missingContact) {
-      scraped = await scrapeCompanyWebsite(candidate.website, candidate.companyName, candidate.location);
-    }
-    
-    // Step 2.5: If still no contact found, try SerpAPI + Playwright fallback
-    let searchResults = { phones: [], emails: [] };
-    if (missingContact && (!scraped.emails.length || !scraped.phones.length)) {
-      console.log(`[Fallback] Searching SerpAPI for "${candidate.companyName}" contact info...`);
-      searchResults = await searchContactInfoViaSerpAPI(candidate.companyName, candidate.location);
+    // Step 1: OpenClaw finds leads - PASS previousCompanies so it searches for different ones
+    updateProgress(productId, 'searching', { message: 'Searching for leads with AI...', stage: 'openclaw' });
+    const openClawLeads = await findLeadsWithOpenClaw(productInfo, previousCompanies);
+    console.log(`[OpenClaw] Returned ${openClawLeads.length} leads`);
+    if (openClawLeads.length > 0) {
+      console.log(`[OpenClaw] Leads: ${openClawLeads.map(l => l.companyName || l.company || 'Unknown').join(', ')}`);
     }
 
-    const emails = [...new Set([candidate.email, ...scraped.emails, ...searchResults.emails].filter(Boolean))];
-    const phones = [...new Set([candidate.phone, ...scraped.phones, ...searchResults.phones].filter(Boolean))]
-      .filter(phone => isValidPhoneNumber(phone)); // Validate ALL phones including from OpenClaw
-    const whatsappLinks = scraped.whatsappLinks || [];
+    // Step 1.5: Now DON'T filter by previous since OpenClaw should exclude them
+    const newLeads = openClawLeads;
+    console.log(`[Filter] Skipping dedup with previous (OpenClaw already excluded them)`);
+
+    const candidates = dedupeByCompanyChain(
+      dedupeByWebsite(
+        newLeads.map((lead) => ({
+          companyName: lead.companyName || lead.company || '',
+          website: lead.website || lead.url || '',
+          snippet: lead.notes || lead.intent || '',
+          source: 'openclaw',
+          location: lead.location || productInfo.location || '',
+          email: lead.email || '',
+          phone: lead.phone || '',
+          contactName: lead.contactName || lead.person || '',
+          channel: lead.channel || '',
+        }))
+      )
+    ).slice(0, MAX_LEADS);
+
+    // Filter out only the EXACT previously found companies, not entire chains
+    const previousCompanyLower = previousCompanies.map(c => c.toLowerCase());
+    console.log(`[Pipeline] Previous companies to exclude (${previousCompanies.length}): ${previousCompanies.slice(0, 5).join(', ')}${previousCompanies.length > 5 ? '...' : ''}`);
     
-    // Extract WhatsApp number from link (prioritize if available)
-    const whatsappNumber = whatsappLinks.length > 0 ? extractWhatsAppNumber(whatsappLinks[0]) : '';
+    const filteredCandidates = candidates.filter(candidate => {
+      const candidateNameLower = (candidate.companyName || '').toLowerCase();
+      const isExcluded = previousCompanyLower.includes(candidateNameLower);
+      if (isExcluded) {
+        console.log(`[Pipeline] Filtering out "${candidate.companyName}" - matches previous company`);
+      }
+      // Only exclude exact name matches, allow different locations of same chain
+      return !isExcluded;
+    });
+
+    console.log(`[Pipeline] After filtering previous: ${candidates.length} → ${filteredCandidates.length} new candidates`);
+    console.log(`[Pipeline] Processing ${filteredCandidates.length} new deduplicated candidates...`);
+    updateProgress(productId, 'enriching', { message: `Enriching ${filteredCandidates.length} candidates...`, stage: 'enrichment' });
+
+    const discoveredLeads = [];
+
+    for (const candidate of filteredCandidates) {
+      try {
+        console.log(`[Pipeline] Enriching candidate #${discoveredLeads.length + 1}: "${candidate.companyName}"...`);
+        updateProgress(productId, 'enriching', { 
+          message: `Processing: ${candidate.companyName}`, 
+          stage: 'enrichment',
+          progress: discoveredLeads.length,
+          total: candidates.length
+        });
+        
+        // Keep going until we have enough leads to satisfy offset + MAX_LEADS
+        // This ensures pagination works: offset=0 returns 0-5, offset=5 returns 5-10, etc.
+        if (discoveredLeads.length >= offset + MAX_LEADS) break;
+
+        // Step 2: Enrich with Playwright to find contact info + always check for WhatsApp
+        const missingContact = !candidate.email && !candidate.phone;
+      console.log(`[Pipeline] Missing contact? ${missingContact} (email: ${candidate.email}, phone: ${candidate.phone})`);
+      
+      let scraped = { emails: [], phones: [], whatsappPhones: [], whatsappLinks: [], socialLinks: [] };
+      
+      // ALWAYS scrape website to check for WhatsApp, even if contact info exists
+      if (candidate.website) {
+        console.log(`[Pipeline] Scraping website: ${candidate.website}${missingContact ? ' (missing contact)' : ' (looking for WhatsApp)'}`);
+        updateProgress(productId, 'enriching', { message: `Scraping website: ${candidate.companyName}...` });
+        scraped = await scrapeCompanyWebsite(candidate.website, candidate.companyName, candidate.location);
+        console.log(`[Pipeline] Website scrape result: ${scraped.emails.length} emails, ${scraped.phones.length} phones, ${scraped.whatsappPhones.length} whatsapp phones`);
+      }
+      
+      // Step 2.5: If still no contact found, try SerpAPI + Playwright fallback
+      let searchResults = { phones: [], emails: [] };
+      if (missingContact && (!scraped.emails.length || !scraped.phones.length)) {
+        console.log(`[Pipeline] No contact on website, trying SerpAPI for "${candidate.companyName}"...`);
+        updateProgress(productId, 'enriching', { message: `Searching: ${candidate.companyName}...` });
+        searchResults = await searchContactInfoViaSerpAPI(candidate.companyName, candidate.location);
+        console.log(`[Pipeline] SerpAPI result: ${searchResults.emails.length} emails, ${searchResults.phones.length} phones`);
+      }
+
+      const emails = [...new Set([candidate.email, ...scraped.emails, ...searchResults.emails].filter(Boolean))];
+      const whatsappNumbers = [...new Set([...scraped.whatsappPhones])]
+        .filter(phone => isValidPhoneNumber(phone)); // Validate WhatsApp numbers
+      const phones = [...new Set([candidate.phone, ...scraped.phones, ...searchResults.phones].filter(Boolean))]
+        .filter(phone => isValidPhoneNumber(phone)); // Validate ALL phones including from OpenClaw
+      const whatsappLinks = scraped.whatsappLinks || [];
+      
+      console.log(`[Pipeline] Final contact info: ${emails.length} emails, ${phones.length} valid phones, ${whatsappNumbers.length} whatsapp text numbers, ${whatsappLinks.length} whatsapp links`);
+      
+      // Extract WhatsApp number from link (prioritize if available)
+      const whatsappNumberFromLink = whatsappLinks.length > 0 ? extractWhatsAppNumber(whatsappLinks[0]) : '';
+      
+      // Determine primary contact with clear channel indication
+      // Priority: WhatsApp (text) > WhatsApp (link) > Email > Phone
+      let primaryContact = '';
+      let contactType = '';
+      let channel = '';
     
-    // Determine primary contact with clear channel indication
-    // Priority: WhatsApp > Email > Phone
-    let primaryContact = '';
-    let contactType = '';
-    let channel = '';
-    
-    if (whatsappNumber) {
-      primaryContact = whatsappNumber;
+    // Check WhatsApp text first (e.g., "WhatsApp: +60 16-211 7281")
+    if (whatsappNumbers.length > 0) {
+      primaryContact = whatsappNumbers[0];
       contactType = 'Whatsapp';
       channel = 'Whatsapp';
+      console.log(`[Pipeline] 📱 Detected WhatsApp (from text): ${primaryContact}`);
+    } else if (whatsappNumberFromLink) {
+      primaryContact = whatsappNumberFromLink;
+      contactType = 'Whatsapp';
+      channel = 'Whatsapp';
+      console.log(`[Pipeline] 📱 Detected WhatsApp (from link): ${primaryContact}`);
     } else if (emails.length > 0) {
       primaryContact = emails[0];
       contactType = 'Email';
       channel = 'Email';
+      console.log(`[Pipeline] 📧 Using Email: ${primaryContact}`);
     } else if (phones.length > 0) {
       primaryContact = phones[0];
       contactType = 'Phone';
       channel = 'Phone';
+      console.log(`[Pipeline] ☎️ Using Phone: ${primaryContact}`);
     } else {
       // No contact info - skip this lead
-      console.log(`Skipping "${candidate.companyName}" — no contact info found after search.`);
+      console.log(`[Pipeline] ❌ SKIPPING "${candidate.companyName}" — no valid contact info found after enrichment`);
       continue;
     }
     
+    console.log(`[Pipeline] ✅ ACCEPTED "${candidate.companyName}" with channel: ${channel}`);
+    
     const primaryEmail = emails[0] || '';
     const primaryPhone = phones[0] || '';
-    
-    // Only override channel if it's a valid communication channel (not "Others" or generic text)
-    const validChannels = ['Email', 'Phone', 'Whatsapp', 'WhatsApp', 'SMS', 'Telegram'];
-    if (candidate.channel && validChannels.includes(candidate.channel)) {
-      channel = candidate.channel;
-    }
+    const primaryWhatsapp = whatsappNumbers[0] || whatsappNumberFromLink || '';
 
 
     const savedLead = await upsertLead({
@@ -521,7 +627,7 @@ async function findLeadsFromProductInfo(productInfo) {
       person: candidate.contactName || '',
       email: primaryEmail,
       phone: primaryPhone,
-      whatsapp: whatsappNumber,
+      whatsapp: primaryWhatsapp,
       contactType: contactType,
       website: candidate.website || '',
       location: candidate.location || productInfo.location || '',
@@ -535,10 +641,37 @@ async function findLeadsFromProductInfo(productInfo) {
       productInfoId: productInfo.id || 'current',
     });
 
-    if (savedLead) discoveredLeads.push(savedLead);
+    if (savedLead) {
+      discoveredLeads.push(savedLead);
+      console.log(`[Pipeline] 💾 Saved lead #${discoveredLeads.length}: "${candidate.companyName}"`);
+    } else {
+      console.log(`[Pipeline] ⚠️  upsertLead returned null/empty for "${candidate.companyName}"`);
+    }
+    } catch (enrichError) {
+      console.error(`[Pipeline] ❌ Error enriching "${candidate.companyName}":`, enrichError.message);
+      continue;
+    }
   }
 
-  return discoveredLeads.slice(0, MAX_LEADS);
+  // Return leads based on pagination offset
+  const paginatedLeads = discoveredLeads.slice(offset, offset + MAX_LEADS);
+  
+  console.log(`[Pagination] Returning leads ${offset + 1}-${offset + paginatedLeads.length} (total discovered: ${discoveredLeads.length})`);
+  
+  // Update progress with completion status
+  updateProgress(productId, 'complete', { 
+    message: `Found ${paginatedLeads.length} leads`,
+    leadsFound: paginatedLeads.length,
+    totalDiscovered: discoveredLeads.length
+  });
+  
+  return paginatedLeads;
+  
+  } catch (error) {
+    console.error('[Pipeline] Fatal error in findLeadsFromProductInfo:', error.message);
+    updateProgress(productId, 'error', { message: `Error: ${error.message}` });
+    return [];
+  }
 }
 
 // ---------------------------------------------------------------------------

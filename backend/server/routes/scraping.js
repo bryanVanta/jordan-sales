@@ -23,7 +23,8 @@ router.post('/find-leads', async (req, res) => {
       });
     }
 
-    const leads = await findLeadsFromProductInfo(incomingProductInfo);
+    const offset = parseInt(req.body?.offset || req.query?.offset || '0', 10) || 0;
+    const leads = await findLeadsFromProductInfo(incomingProductInfo, offset);
 
     res.json({
       success: true,
@@ -31,6 +32,7 @@ router.post('/find-leads', async (req, res) => {
         productInfo: incomingProductInfo,
         leads,
         count: leads.length,
+        offset,
       },
     });
   } catch (error) {

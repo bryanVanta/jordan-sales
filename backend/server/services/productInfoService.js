@@ -212,26 +212,42 @@ async function saveTrainingAsset(assetKey, assetData) {
 }
 
 async function saveCurrentProductInfo(data) {
-  const payload = normalizePayload(data);
   const docRef = db.collection(COLLECTION_NAME).doc(CURRENT_DOC_ID);
   const existingDoc = await docRef.get();
   const existingData = existingDoc.exists ? existingDoc.data() : {};
 
-  // Merge training assets: preserve extractedText and uploadedAt from Firebase
-  // so that saving the form never wipes previously uploaded asset content.
+  // Only update fields that are explicitly provided (don't wipe with empty strings)
+  const updateData = {};
+  if (data.productName !== undefined) updateData.productName = data.productName;
+  if (data.productType !== undefined) updateData.productType = data.productType;
+  if (data.description !== undefined) updateData.description = data.description;
+  if (data.keyBenefit !== undefined) updateData.keyBenefit = data.keyBenefit;
+  if (data.targetCustomer !== undefined) updateData.targetCustomer = data.targetCustomer;
+  if (data.location !== undefined) updateData.location = data.location;
+  if (data.moreAboutProduct !== undefined) updateData.moreAboutProduct = data.moreAboutProduct;
+
+  // Preserve training assets with smart merging
   const mergedTrainingAssets = {};
   for (const key of TRAINING_ASSET_KEYS) {
-    const incoming = payload.trainingAssets[key] || {};
+    const incoming = data.trainingAssets?.[key] || {};
     const existing = existingData.trainingAssets?.[key] || {};
-    mergedTrainingAssets[key] = {
-      ...incoming,
-      extractedText: incoming.extractedText || existing.extractedText || '',
-      uploadedAt: incoming.uploadedAt || existing.uploadedAt || null,
-    };
+    // Only update if incoming has extractedText or fileName
+    if (incoming.extractedText || incoming.fileName) {
+      mergedTrainingAssets[key] = {
+        fileName: incoming.fileName || existing.fileName || '',
+        mimeType: incoming.mimeType || existing.mimeType || '',
+        extractedText: incoming.extractedText || existing.extractedText || '',
+        uploadedAt: incoming.uploadedAt || existing.uploadedAt || null,
+      };
+    } else {
+      // Preserve existing if nothing new provided
+      mergedTrainingAssets[key] = existing;
+    }
   }
 
   const savedData = {
-    ...payload,
+    ...existingData, // Start with existing data
+    ...updateData, // Apply only specified updates
     trainingAssets: mergedTrainingAssets,
     id: CURRENT_DOC_ID,
     createdAt: existingDoc.exists ? existingData.createdAt || new Date() : new Date(),

@@ -17,7 +17,7 @@ export default function ProjectsPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add');
   const [formData, setFormData] = useState({
-    company: '', person: '', email: '', location: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email'
+    company: '', person: '', email: '', phone: '', whatsapp: '', location: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email'
   });
 
   const loadLeads = async () => {
@@ -37,6 +37,8 @@ export default function ProjectsPage() {
         person: lead.person || '',
         email: lead.email || '',
         phone: lead.phone || '',
+        whatsapp: lead.whatsapp || '',
+        contactType: lead.contactType || '',
         location: lead.location || '',
         temp: lead.temp || lead.leadTemperature || 'Neutral',
         last: lead.status || 'new',
@@ -88,7 +90,7 @@ export default function ProjectsPage() {
 
   const handleAdd = () => {
     setModalMode('add');
-    setFormData({ company: '', person: '', email: '', location: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email' });
+    setFormData({ company: '', person: '', email: '', phone: '', whatsapp: '', location: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email' });
     setIsModalOpen(true);
   };
 
@@ -97,7 +99,7 @@ export default function ProjectsPage() {
     const project = projects.find(l => l.id === selectedProjects[0]);
     if (project) {
       setFormData({ 
-        company: project.company, person: project.person, email: project.email, location: project.location,
+        company: project.company, person: project.person, email: project.email, phone: project.phone, whatsapp: project.whatsapp, location: project.location,
         temp: project.temp, intent: project.intent, next: project.next, channel: project.channel 
       });
       setModalMode('edit');
@@ -202,8 +204,8 @@ export default function ProjectsPage() {
                 <th className="py-3 px-4 group cursor-pointer sticky left-12 z-30 bg-white shadow-[2px_0_0_rgba(0,0,0,0.05)]" onClick={() => handleSort('company')}>
                   <div className="flex items-center text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap group-hover:text-blue-600">Company Name <ChevronDown size={10} className="ml-1 opacity-20" /></div>
                 </th>
-                {['Person in Charge', 'Email', 'Location', 'Temperature', 'Status', 'Intent', 'Next Action', 'Channel'].map((label, idx) => (
-                  <th key={label} className="py-3 px-4 group cursor-pointer" onClick={() => handleSort(['person', 'email', 'location', 'temp', 'last', 'intent', 'next', 'channel'][idx])}>
+                {['Person in Charge', 'Contact', 'Email', 'Location', 'Temperature', 'Status', 'Intent', 'Next Action', 'Channel'].map((label, idx) => (
+                  <th key={label} className="py-3 px-4 group cursor-pointer" onClick={() => handleSort(['person', 'phone', 'email', 'location', 'temp', 'last', 'intent', 'next', 'channel'][idx])}>
                     <div className="flex items-center text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap group-hover:text-blue-600">{label} <ChevronDown size={10} className="ml-1 opacity-20" /></div>
                   </th>
                 ))}
@@ -219,6 +221,27 @@ export default function ProjectsPage() {
                   </td>
                   <td className="py-2.5 px-4 whitespace-nowrap sticky left-12 z-10 bg-white group-hover:bg-[#f8faff] transition-colors shadow-[2px_0_0_rgba(0,0,0,0.05)]"><span className="text-[13px] font-black text-gray-800">{proj.company}</span></td>
                   <td className="py-2.5 px-4 whitespace-nowrap font-bold text-[13px] text-gray-600">{proj.person}</td>
+                  <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px]">
+                    {proj.whatsapp ? (
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wide">WhatsApp</span>
+                        <div className="flex items-center gap-1 text-emerald-600 hover:text-emerald-700 cursor-pointer">
+                          <MessageCircle size={14} className="text-emerald-500" />
+                          <span className="font-mono text-[11px]">{proj.whatsapp}</span>
+                        </div>
+                      </div>
+                    ) : proj.phone ? (
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wide">Phone</span>
+                        <div className="flex items-center gap-1 text-amber-600">
+                          <span className="text-[12px]">📱</span>
+                          <span className="font-mono text-[11px]">{proj.phone}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="text-gray-400 text-[11px]">No contact</span>
+                    )}
+                  </td>
                   <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-blue-500/80">{proj.email || 'No email found'}</td>
                   <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-gray-500">{proj.location}</td>
                   <td className="py-2.5 px-4 whitespace-nowrap"><div className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider border flex items-center gap-1 w-fit ${getTempStyle(proj.temp)}`}>{proj.temp}</div></td>
@@ -277,6 +300,16 @@ export default function ProjectsPage() {
                 <div className="space-y-1.5 flex flex-col items-start text-left">
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Business Email</label>
                   <input required type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                   <div className="space-y-1.5 flex flex-col items-start text-left">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Phone Number</label>
+                    <input type="tel" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" placeholder="+60123456789" />
+                   </div>
+                   <div className="space-y-1.5 flex flex-col items-start text-left">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">WhatsApp Number</label>
+                    <input type="tel" value={formData.whatsapp} onChange={e => setFormData({...formData, whatsapp: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" placeholder="+60123456789" />
+                   </div>
                 </div>
                 <div className="space-y-1.5 flex flex-col items-start text-left">
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Location</label>

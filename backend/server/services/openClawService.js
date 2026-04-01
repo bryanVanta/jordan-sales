@@ -37,7 +37,7 @@ const OPENCLAW_JORDAN_BOT_NAME = process.env.OPENCLAW_JORDAN_BOT_NAME || 'Jordan
 const OPENCLAW_JORDAN_NAMESPACE = process.env.OPENCLAW_JORDAN_NAMESPACE || 'jordan-sales';
 const OPENCLAW_JORDAN_TRANSPORT = (process.env.OPENCLAW_JORDAN_TRANSPORT || 'rpc').trim().toLowerCase();
 const OPENCLAW_JORDAN_RPC_TIMEOUT_MS = Number(process.env.OPENCLAW_JORDAN_RPC_TIMEOUT_MS || 120000);
-const MAX_LEADS = 6;
+const MAX_LEADS = 10;
 
 const normalizeOpenClawLead = (lead = {}, fallbackLocation = '') => ({
   companyName: lead.companyName || lead.company || '',
@@ -176,7 +176,7 @@ const extractLeadsFromPayload = (payload) => {
 };
 
 const buildJordanPrompt = (productInfo = {}) => JSON.stringify({
-  task: 'Find up to 5 leads that match this product and target customer profile.',
+  task: `Find up to ${MAX_LEADS} leads that match this product and target customer profile. IMPORTANT: Return DIVERSE companies from DIFFERENT chains/brands, not multiple locations of the same company (e.g., don't return Hotel 99 Pudu AND Hotel 99 Sri Petaling together - return different hotel chains).`,
   output: {
     instruction: 'Return ONLY strict JSON with this exact shape: {"leads":[...]} and no extra text.',
     leadShape: {
@@ -193,6 +193,8 @@ const buildJordanPrompt = (productInfo = {}) => JSON.stringify({
       maxLeads: MAX_LEADS,
       preferPublicBusinessContacts: true,
       noFabrication: true,
+      diverseCompanies: 'Return results from different companies/brands, not just different locations of the same company chain',
+      excludeDuplicates: 'Do not return multiple locations of the same company (e.g., Hotel 99 in different cities). Focus on unique companies.',
     },
   },
   context: {

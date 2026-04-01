@@ -116,6 +116,7 @@ const ChatInterface = () => {
   const [inputValue, setInputValue] = useState("");
   const [showPlusMenu, setShowPlusMenu] = useState(false);
   const [allCustomers, setAllCustomers] = useState<CustomerData[]>(CUSTOMERS);
+  const [activeView, setActiveView] = useState<'list' | 'chat' | 'info'>('list');
   
   const currentCustomer = allCustomers.find(c => c.id === selectedCustomerId) || allCustomers[0];
 
@@ -156,29 +157,29 @@ const ChatInterface = () => {
   };
 
   const StatusCard = ({ label, count, bg, text, border, icon: Icon, trend }: any) => (
-    <div className={`${bg} p-3.5 rounded-[22px] flex flex-col border ${border} justify-center group hover:brightness-95 transition-all relative overflow-hidden h-[100px] flex-1`}>
-      <Icon size={48} strokeWidth={1} className={`absolute -right-2 -bottom-2 ${text} opacity-20`} />
-      <div className="flex items-center gap-2 mb-1.5 z-10">
-        <span className={`${text} font-bold text-[11px]`}>{label}</span>
-        <div className={`bg-white/60 ${text} px-1.5 py-0.5 rounded-full text-[9px] font-bold flex items-center gap-0.5 shadow-sm border border-white/50`}>
-           <TrendingUp size={10} strokeWidth={3} /> {trend}
+    <div className={`${bg} p-2.5 sm:p-3.5 rounded-[22px] flex flex-col border ${border} justify-center group hover:brightness-95 transition-all relative overflow-hidden h-[80px] sm:h-[100px] flex-1`}>
+      <Icon size={40} strokeWidth={1} className={`absolute -right-1 -bottom-1 ${text} opacity-20`} />
+      <div className="flex items-center gap-1.5 sm:gap-2 mb-1 z-10">
+        <span className={`${text} font-bold text-[9px] sm:text-[11px]`}>{label}</span>
+        <div className={`bg-white/60 ${text} px-1.5 py-0.5 rounded-full text-[8px] sm:text-[9px] font-bold flex items-center gap-0.5 shadow-sm border border-white/50`}>
+           <TrendingUp size={9} strokeWidth={3} /> {trend}
         </div>
       </div>
       <div className={`flex items-end gap-1 ${text} z-10`}>
-        <span className="text-3xl font-black tracking-tighter">{count}</span>
+        <span className="text-2xl sm:text-3xl font-black tracking-tighter">{count}</span>
       </div>
     </div>
   );
 
   return (
-    <div className="absolute inset-0 flex p-4 gap-3 overflow-hidden pb-[20px] h-full">
+    <div className="absolute inset-0 flex p-3 sm:p-4 gap-3 overflow-hidden pb-[20px] h-full">
       <div className="absolute inset-0 bg-blue-500/[0.02] pointer-events-none -z-10"></div>
       
       {/* ================= LEFT COLUMN: Customer Selection ================= */}
-      <div className="w-[360px] flex flex-col h-full animate-in slide-in-from-left-4 duration-500">
-        <div className="bg-white/90 backdrop-blur-2xl rounded-[32px] border border-white p-4 shadow-xl flex flex-col h-full overflow-hidden">
+      <div className={`w-full lg:w-[360px] lg:flex flex-col h-full animate-in slide-in-from-left-4 duration-500 ${activeView === 'list' ? 'flex' : 'hidden'}`}>
+        <div className="bg-white/90 backdrop-blur-2xl rounded-[28px] sm:rounded-[32px] border border-white p-3 sm:p-4 shadow-xl flex flex-col h-full overflow-hidden">
           
-          <div className="grid grid-cols-2 gap-2.5 mb-4">
+          <div className="grid grid-cols-2 gap-2 sm:gap-2.5 mb-4">
             <StatusCard label="Hot" count="42" trend="+12" bg="bg-[#FFF0EB]" text="text-orange-600" border="border-orange-100" icon={Flame} />
             <StatusCard label="Cold" count="18" trend="+3" bg="bg-[#EBF4FF]" text="text-blue-600" border="border-blue-100" icon={Snowflake} />
             <StatusCard label="Warm" count="27" trend="+8" bg="bg-[#FFFDF0]" text="text-yellow-600" border="border-yellow-100" icon={Sun} />
@@ -200,10 +201,14 @@ const ChatInterface = () => {
               return (
                 <button 
                   key={customer.id} 
-                  onClick={() => setSelectedCustomerId(customer.id)}
+                  onClick={() => {
+                    setSelectedCustomerId(customer.id);
+                    setActiveView('chat');
+                  }}
                   onDoubleClick={() => {
                     setSelectedCustomerId(customer.id);
                     setShowContactInfo(true);
+                    setActiveView('chat');
                   }}
                   className={`w-full flex items-center gap-3 p-3 rounded-2xl border border-transparent transition-all group relative overflow-hidden ${
                     selectedCustomerId === customer.id 
@@ -240,9 +245,23 @@ const ChatInterface = () => {
       </div>
 
       {/* ================= MIDDLE COLUMN: Chat Area ================= */}
-      <div className="flex-1 flex flex-col bg-white/90 backdrop-blur-2xl rounded-[32px] border border-white shadow-xl h-full overflow-hidden relative animate-in zoom-in-95 duration-500">
+      <div className={`flex-1 lg:flex flex-col bg-white/90 backdrop-blur-2xl rounded-[28px] sm:rounded-[32px] border border-white shadow-xl h-full overflow-hidden relative animate-in zoom-in-95 duration-500 ${activeView === 'chat' ? 'flex' : 'hidden'}`}>
         
-        <div className="flex-1 overflow-y-auto p-6 space-y-4 custom-scrollbar bg-gray-50/20">
+        {/* Mobile Header (back button) */}
+        <div className="lg:hidden flex items-center justify-between p-4 border-b border-gray-50 bg-white/50">
+          <button onClick={() => setActiveView('list')} className="p-2 bg-gray-50 rounded-xl text-gray-400 hover:text-blue-600 transition-all active:scale-95">
+             <ChevronRight size={20} className="rotate-180" />
+          </button>
+          <div className="flex flex-col items-center">
+             <span className="text-[13px] font-black text-gray-900 leading-tight">{currentCustomer.name}</span>
+             <span className="text-[10px] font-bold text-blue-500">{currentCustomer.time}</span>
+          </div>
+          <button onClick={() => setActiveView('info')} className="p-2 bg-gray-50 rounded-xl text-gray-400 hover:text-blue-600 transition-all active:scale-95">
+             <Info size={20} />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 custom-scrollbar bg-gray-50/20">
           {currentCustomer.messages.map((msg) => (
             <div key={msg.id} className={`flex ${msg.sender === 'bot' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
               <div className={`flex flex-col max-w-[75%] ${msg.sender === 'bot' ? 'items-end' : 'items-start'}`}>
@@ -261,8 +280,8 @@ const ChatInterface = () => {
           <div ref={messagesEndRef} />
         </div>
 
-        <div className="p-6 pb-[100px] mt-auto border-t border-gray-50/50 bg-white/50">
-          <div className="bg-white border border-gray-100 rounded-[24px] p-2.5 shadow-sm flex items-center gap-3 transition-all relative">
+        <div className="p-4 sm:p-6 pb-[100px] mt-auto border-t border-gray-50/50 bg-white/50">
+          <div className="bg-white border border-gray-100 rounded-[24px] p-2 sm:p-2.5 shadow-sm flex items-center gap-2 sm:gap-3 transition-all relative">
             <div className="relative">
               <button 
                 onClick={() => setShowPlusMenu(!showPlusMenu)}
@@ -331,14 +350,16 @@ const ChatInterface = () => {
       </div>
 
       {/* ================= RIGHT COLUMN: Contact Info ================= */}
-      {showContactInfo && (
-        <div className="w-[340px] flex flex-col h-full animate-in slide-in-from-right-4 duration-500">
-          <div className="bg-white/90 backdrop-blur-2xl rounded-[32px] border border-white p-5 shadow-xl flex flex-col h-full overflow-hidden">
-            <div className="flex items-center gap-2 mb-4">
-              <button onClick={() => setShowContactInfo(false)} className="p-1.5 bg-gray-50 hover:bg-gray-100 rounded-lg text-gray-400 transition-colors">
-                <ChevronRight size={16} />
-              </button>
-              <h2 className="text-lg font-black text-gray-900 tracking-tight">Contact Info</h2>
+      {(showContactInfo || activeView === 'info') && (
+        <div className={`w-full lg:w-[340px] xl:flex flex-col h-full animate-in slide-in-from-right-4 duration-500 ${activeView === 'info' ? 'flex' : (showContactInfo && activeView === 'chat' ? 'hidden xl:flex' : 'hidden')}`}>
+          <div className="bg-white/90 backdrop-blur-2xl rounded-[28px] sm:rounded-[32px] border border-white p-4 sm:p-5 shadow-xl flex flex-col h-full overflow-hidden">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-2">
+                <button onClick={() => activeView === 'info' ? setActiveView('chat') : setShowContactInfo(false)} className="p-1.5 bg-gray-50 hover:bg-gray-100 rounded-lg text-gray-400 transition-colors">
+                  <ChevronRight size={16} />
+                </button>
+                <h2 className="text-base sm:text-lg font-black text-gray-900 tracking-tight">Contact Info</h2>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar pb-32">

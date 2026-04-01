@@ -7,10 +7,16 @@ const admin = require('firebase-admin');
 require('dotenv').config();
 
 // Reconstruct the private key with proper headers
-const rawPrivateKey = process.env.FIREBASE_PRIVATE_KEY || '';
-const privateKey = rawPrivateKey.includes('-----BEGIN')
-  ? rawPrivateKey.replace(/\\n/g, '\n')
-  : `-----BEGIN PRIVATE KEY-----\n${rawPrivateKey.replace(/\\n/g, '\n')}\n-----END PRIVATE KEY-----`;
+let rawPrivateKey = process.env.FIREBASE_PRIVATE_KEY || '';
+
+// Remove surrounding quotes if present
+if ((rawPrivateKey.startsWith('"') && rawPrivateKey.endsWith('"')) ||
+    (rawPrivateKey.startsWith("'") && rawPrivateKey.endsWith("'"))) {
+  rawPrivateKey = rawPrivateKey.slice(1, -1);
+}
+
+// Replace escaped newlines with actual newlines
+const privateKey = rawPrivateKey.replace(/\\n/g, '\n');
 
 const serviceAccount = {
   type: "service_account",

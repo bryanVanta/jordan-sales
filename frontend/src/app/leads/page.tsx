@@ -1,35 +1,118 @@
 "use client";
-import React, { useState, useMemo, useRef } from 'react';
-import { Search, Filter, Play, Pause, Plus, FileUp, Edit3, Check, ChevronUp, ChevronDown, X, Mail, MessageCircle, Send, ChevronRight } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { Search, Filter, Play, Pause, Plus, FileUp, Edit3, Check, ChevronUp, ChevronDown, X, Mail, MessageCircle, Send, ChevronRight, Loader } from 'lucide-react';
 
-const INITIAL_PROJECTS = [
-  { id: 1, company: 'Starlight Media', person: 'Sarah Connor', email: 'sarah.c@starlight.com', temp: 'Hot', last: '2h ago', intent: 'Looking for scaling', next: 'Send Promo', channel: 'Whatsapp' },
-  { id: 2, company: 'Nova Tech', person: 'John Wick', email: 'j.wick@continental.com', temp: 'Warm', last: '1d ago', intent: 'Interested in automation', next: 'Follow Up', channel: 'Email' },
-  { id: 3, company: 'Echo Systems', person: 'Ellen Ripley', email: 'ripley@weyland.com', temp: 'Cold', last: '5d ago', intent: 'Not interested currently', next: 'Escalate', channel: 'Telegram' },
-  { id: 4, company: 'Glitch Ltd.', person: 'Neo Anderson', email: 'neo@matrix.net', temp: 'Neutral', last: '3h ago', intent: 'Wants to understand pricing', next: 'Close Deal', channel: 'Whatsapp' },
-  { id: 5, company: 'Cyberdyne', person: 'Miles Dyson', email: 'miles.d@cyberdyne.com', temp: 'Hot', last: '30m ago', intent: 'Security infrastructure', next: 'Send Promo', channel: 'Email' },
-  { id: 6, company: 'Tyrell Corp', person: 'Eldon Tyrell', email: 'tyrell@replica.co', temp: 'Cold', last: '12h ago', intent: 'Legacy data migration', next: 'Escalate', channel: 'Whatsapp' },
-];
+const API_BASE_URL = 'http://localhost:5000/api';
 
 export default function ProjectsPage() {
-  const [projects, setProjects] = useState(INITIAL_PROJECTS);
+  const [projects, setProjects] = useState<any[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [isOutreachActive, setIsOutreachActive] = useState(false);
-  const [selectedProjects, setSelectedProjects] = useState<number[]>([]);
+  const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [offset, setOffset] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMoreLeads, setHasMoreLeads] = useState(false);
+  const [progress, setProgress] = useState<any>({ status: 'idle' });
+  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add');
   const [formData, setFormData] = useState({
-    company: '', person: '', email: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email'
+    company: '', person: '', email: '', phone: '', whatsapp: '', location: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email'
   });
+
+  const startProgressTracking = () => {
+    // Poll every 500ms during active search
+    progressIntervalRef.current = setInterval(async () => {
+      try {
+        const response = await fetch(`${API_BASE_URL}/progress/current`);
+        if (response.ok) {
+          const progressData = await response.json();
+          setProgress(progressData);
+        }
+      } catch (err) {
+        // Silent fail, not critical
+      }
+    }, 500);
+  };
+
+  const stopProgressTracking = () => {
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+  };
+
+  const loadLeads = useCallback(async (pageOffset = 0, append = false) => {
+    if (!append) setLoading(true);
+    setLoadingMore(append);
+    setError('');
+    
+    // Start tracking progress
+    startProgressTracking();
+
+    try {
+      const endpoint = pageOffset > 0 ? `${API_BASE_URL}/scraping/find-leads?offset=${pageOffset}` : `${API_BASE_URL}/leads`;
+      const response = await fetch(endpoint, {
+        method: pageOffset > 0 ? 'POST' : 'GET',
+        headers: pageOffset > 0 ? { 'Content-Type': 'application/json' } : {},
+        body: pageOffset > 0 ? JSON.stringify({ offset: pageOffset }) : undefined,
+      });
+      
+      if (!response.ok) {
+        throw new Error('Failed to load leads');
+      }
+
+      const result = await response.json();
+      const newRows = (result.data?.leads || result.data || []).map((lead: any) => ({
+        id: String(lead.id),
+        company: lead.companyName || lead.company || 'Unknown Company',
+        person: lead.person || '',
+        email: lead.email || '',
+        phone: lead.phone || '',
+        whatsapp: lead.whatsapp || '',
+        contactType: lead.contactType || '',
+        location: lead.location || '',
+        temp: lead.temp || lead.leadTemperature || 'Neutral',
+        last: lead.status || 'new',
+        intent: lead.intent || '',
+        next: lead.next || lead.nextAction || 'Follow Up',
+        channel: lead.channel || 'Email',
+      }));
+      
+      setProjects(append ? (prevProjects) => [...prevProjects, ...newRows] : newRows);
+      setOffset(pageOffset);
+      setHasMoreLeads(newRows.length >= 10); // Show "Load More" if we got a full page (10 leads)
+    } catch (loadError) {
+      console.error(loadError);
+      setError('Could not load leads from the backend.');
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+      stopProgressTracking();
+      setProgress({ status: 'idle' });
+    }
+  }, []);
+
+  const handleLoadMore = () => {
+    loadLeads(offset + 10, true); // Load next 10 (append mode)
+  };
+
+  useEffect(() => {
+    loadLeads();
+    return () => stopProgressTracking(); // Cleanup on unmount
+  }, [loadLeads]);
 
   const filteredProjects = useMemo(() => {
     let items = projects.filter(proj => 
       proj.company.toLowerCase().includes(searchTerm.toLowerCase()) ||
       proj.person.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      proj.email.toLowerCase().includes(searchTerm.toLowerCase())
+      proj.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      proj.location.toLowerCase().includes(searchTerm.toLowerCase())
     );
     if (sortConfig) {
       items.sort((a, b) => {
@@ -43,7 +126,7 @@ export default function ProjectsPage() {
     return items;
   }, [projects, searchTerm, sortConfig]);
 
-  const toggleProject = (id: number) => {
+  const toggleProject = (id: string) => {
     setSelectedProjects(prev => prev.includes(id) ? prev.filter(l => l !== id) : [...prev, id]);
   };
 
@@ -55,7 +138,7 @@ export default function ProjectsPage() {
 
   const handleAdd = () => {
     setModalMode('add');
-    setFormData({ company: '', person: '', email: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email' });
+    setFormData({ company: '', person: '', email: '', phone: '', whatsapp: '', location: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email' });
     setIsModalOpen(true);
   };
 
@@ -64,7 +147,7 @@ export default function ProjectsPage() {
     const project = projects.find(l => l.id === selectedProjects[0]);
     if (project) {
       setFormData({ 
-        company: project.company, person: project.person, email: project.email, 
+        company: project.company, person: project.person, email: project.email, phone: project.phone, whatsapp: project.whatsapp, location: project.location,
         temp: project.temp, intent: project.intent, next: project.next, channel: project.channel 
       });
       setModalMode('edit');
@@ -74,13 +157,42 @@ export default function ProjectsPage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (modalMode === 'add') {
-      const newProject = { ...formData, id: Date.now(), last: 'Just now' };
-      setProjects([newProject, ...projects]);
-    } else {
-      setProjects(projects.map(l => l.id === selectedProjects[0] ? { ...l, ...formData } : l));
-    }
-    setIsModalOpen(false);
+
+    const saveLead = async () => {
+      const payload = {
+        company: formData.company,
+        companyName: formData.company,
+        person: formData.person,
+        email: formData.email,
+        location: formData.location,
+        temp: formData.temp,
+        leadTemperature: formData.temp,
+        status: 'new',
+        intent: formData.intent,
+        next: formData.next,
+        nextAction: formData.next,
+        channel: formData.channel,
+      };
+
+      const endpoint = modalMode === 'add'
+        ? `${API_BASE_URL}/leads`
+        : `${API_BASE_URL}/leads/${selectedProjects[0]}`;
+      const method = modalMode === 'add' ? 'POST' : 'PUT';
+
+      await fetch(endpoint, {
+        method,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+
+      setIsModalOpen(false);
+      await loadLeads();
+    };
+
+    saveLead().catch((submitError) => {
+      console.error(submitError);
+      setError('Could not save the lead.');
+    });
   };
 
   const getTempStyle = (temp: string) => {
@@ -103,9 +215,9 @@ export default function ProjectsPage() {
   };
 
   return (
-    <div className="flex flex-col h-full px-10 relative overflow-hidden pb-32">
-      <div className="flex items-center justify-between mb-6 z-10">
-        <div className="flex items-center gap-4 flex-1">
+    <div className="flex flex-col h-full px-4 sm:px-10 relative overflow-hidden pb-40 lg:pb-32">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 z-10 gap-4">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 flex-1 w-full">
           <div className="relative w-full max-w-xs group">
             <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
             <input 
@@ -116,23 +228,67 @@ export default function ProjectsPage() {
               className="w-full bg-white border border-gray-100 rounded-xl py-2 pl-10 pr-4 text-[13px] font-bold outline-none focus:ring-2 focus:ring-blue-100 transition-all placeholder:text-gray-400 shadow-sm"
             />
           </div>
-          <button className="flex items-center gap-2 bg-white border border-gray-100 px-4 py-2 rounded-xl text-[13px] font-black text-gray-800 hover:bg-gray-50 transition-all">
+          <button className="flex items-center justify-center gap-2 bg-white border border-gray-100 px-4 py-2 rounded-xl text-[13px] font-black text-gray-800 hover:bg-gray-50 transition-all">
             <Filter size={16} className="text-blue-500" /> Filter
           </button>
         </div>
       </div>
 
+      {/* Progress Status Bar */}
+      {progress.status !== 'idle' && (
+        <div className={`mb-4 p-3 rounded-lg border flex items-center gap-3 z-10 ${
+          progress.status === 'error' 
+            ? 'bg-red-50 border-red-200' 
+            : progress.status === 'complete'
+            ? 'bg-green-50 border-green-200'
+            : 'bg-blue-50 border-blue-200'
+        }`}>
+          {progress.status !== 'complete' && progress.status !== 'error' && (
+            <Loader size={16} className={`${progress.status === 'searching' ? 'animate-spin text-blue-600' : 'animate-pulse text-amber-600'}`} />
+          )}
+          <div className="flex-1">
+            <p className={`text-[13px] font-bold ${
+              progress.status === 'error' 
+                ? 'text-red-700' 
+                : progress.status === 'complete'
+                ? 'text-green-700'
+                : 'text-blue-700'
+            }`}>
+              {progress.status === 'searching' && '🔍 Searching for leads...'}
+              {progress.status === 'enriching' && `📊 ${progress.message || 'Enriching leads...'}`}
+              {progress.status === 'loading' && '📚 Loading previous data...'}
+              {progress.status === 'complete' && `✅ Found ${progress.leadsFound || 0} leads`}
+              {progress.status === 'error' && `❌ ${progress.message || 'Error during search'}`}
+            </p>
+            {progress.progress && progress.total && (
+              <p className="text-[11px] text-gray-600 mt-1">
+                Progress: {progress.progress} / {progress.total}
+              </p>
+            )}
+          </div>
+        </div>
+      )}
+
       <div className="flex-1 bg-white/80 backdrop-blur-md rounded-[24px] border border-gray-100 shadow-sm overflow-hidden flex flex-col min-h-[550px] z-10">
         <div ref={scrollContainerRef} className="overflow-x-auto overflow-y-auto flex-1 relative custom-scrollbar">
-          <table className="w-full text-left border-collapse min-w-[1400px]">
+          {loading ? (
+            <div className="flex h-full items-center justify-center px-8 py-16 text-center text-sm font-bold text-gray-500">
+              Loading leads from Firebase...
+            </div>
+          ) : error ? (
+            <div className="flex h-full items-center justify-center px-8 py-16 text-center text-sm font-bold text-red-500">
+              {error}
+            </div>
+          ) : (
+          <table className="w-full text-left border-collapse min-w-[1520px]">
             <thead className="sticky top-0 z-20">
               <tr className="border-b border-gray-100 bg-white/95 backdrop-blur-sm">
                 <th className="py-3 pl-8 pr-4 w-12 text-center sticky left-0 z-30 bg-white shadow-[2px_0_0_rgba(0,0,0,0.05)]"></th>
                 <th className="py-3 px-4 group cursor-pointer sticky left-12 z-30 bg-white shadow-[2px_0_0_rgba(0,0,0,0.05)]" onClick={() => handleSort('company')}>
                   <div className="flex items-center text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap group-hover:text-blue-600">Company Name <ChevronDown size={10} className="ml-1 opacity-20" /></div>
                 </th>
-                {['Person in Charge', 'Email', 'Temperature', 'Status', 'Intent', 'Next Action', 'Channel'].map((label, idx) => (
-                  <th key={label} className="py-3 px-4 group cursor-pointer" onClick={() => handleSort(['person', 'email', 'temp', 'last', 'intent', 'next', 'channel'][idx])}>
+                {['Person in Charge', 'Contact', 'Email', 'Location', 'Temperature', 'Status', 'Intent', 'Next Action', 'Channel'].map((label, idx) => (
+                  <th key={label} className="py-3 px-4 group cursor-pointer" onClick={() => handleSort(['person', 'phone', 'email', 'location', 'temp', 'last', 'intent', 'next', 'channel'][idx])}>
                     <div className="flex items-center text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap group-hover:text-blue-600">{label} <ChevronDown size={10} className="ml-1 opacity-20" /></div>
                   </th>
                 ))}
@@ -148,7 +304,29 @@ export default function ProjectsPage() {
                   </td>
                   <td className="py-2.5 px-4 whitespace-nowrap sticky left-12 z-10 bg-white group-hover:bg-[#f8faff] transition-colors shadow-[2px_0_0_rgba(0,0,0,0.05)]"><span className="text-[13px] font-black text-gray-800">{proj.company}</span></td>
                   <td className="py-2.5 px-4 whitespace-nowrap font-bold text-[13px] text-gray-600">{proj.person}</td>
-                  <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-blue-500/80">{proj.email}</td>
+                  <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px]">
+                    {proj.whatsapp ? (
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wide">WhatsApp</span>
+                        <div className="flex items-center gap-1 text-emerald-600 hover:text-emerald-700 cursor-pointer">
+                          <MessageCircle size={14} className="text-emerald-500" />
+                          <span className="font-mono text-[11px]">{proj.whatsapp}</span>
+                        </div>
+                      </div>
+                    ) : proj.phone ? (
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wide">Phone</span>
+                        <div className="flex items-center gap-1 text-amber-600">
+                          <span className="text-[12px]">📱</span>
+                          <span className="font-mono text-[11px]">{proj.phone}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="text-gray-400 text-[11px]">-</span>
+                    )}
+                  </td>
+                  <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-blue-500/80">{proj.email || '-'}</td>
+                  <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-gray-500">{proj.location}</td>
                   <td className="py-2.5 px-4 whitespace-nowrap"><div className={`px-2 py-0.5 rounded-lg text-[9px] font-black uppercase tracking-wider border flex items-center gap-1 w-fit ${getTempStyle(proj.temp)}`}>{proj.temp}</div></td>
                   <td className="py-2.5 px-4 whitespace-nowrap"><span className="text-[10px] font-bold text-gray-400 italic">{proj.last}</span></td>
                   <td className="py-2.5 px-4 whitespace-nowrap font-medium text-[12px] text-gray-500 max-w-[200px] truncate">{proj.intent}</td>
@@ -158,23 +336,29 @@ export default function ProjectsPage() {
               ))}
             </tbody>
           </table>
+          )}
         </div>
       </div>
 
-      <div className="fixed bottom-[60px] left-0 right-0 px-20 pointer-events-none z-50">
-        <div className="flex items-center justify-between w-full max-w-[1600px] mx-auto pointer-events-auto">
-          <div className="flex items-center gap-2">
-            <button onClick={handleAdd} className="flex items-center gap-2 bg-gray-900 border border-white/10 text-white px-6 py-3 rounded-[18px] text-[12px] font-bold shadow-2xl hover:bg-black transition-all transform hover:-translate-y-1">
+      <div className="fixed bottom-24 lg:bottom-[60px] left-0 right-0 px-4 sm:px-10 lg:px-20 pointer-events-none z-50">
+        <div className="flex flex-col lg:flex-row items-center justify-between w-full max-w-[1600px] mx-auto pointer-events-auto gap-3">
+          <div className="flex flex-wrap items-center justify-center gap-2">
+            <button onClick={handleAdd} className="flex items-center gap-2 bg-gray-900 border border-white/10 text-white px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-bold shadow-2xl hover:bg-black transition-all transform hover:-translate-y-1">
               <div className="w-5 h-5 rounded-md bg-blue-500 flex items-center justify-center"><Plus size={14} strokeWidth={3} /></div> Add Projects
             </button>
-            <button className="flex items-center gap-2 bg-white border border-gray-100 px-6 py-3 rounded-[18px] text-[12px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all transform hover:-translate-y-1">
+            <button className="flex items-center gap-2 bg-white border border-gray-100 px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all transform hover:-translate-y-1">
               <FileUp size={16} className="text-blue-500" /> Import
             </button>
-            <button disabled={selectedProjects.length === 0} onClick={handleEdit} className={`flex items-center gap-2 bg-white border border-gray-100 px-6 py-3 rounded-[18px] text-[12px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all transform hover:-translate-y-1 ${selectedProjects.length === 0 ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
+            <button disabled={selectedProjects.length === 0} onClick={handleEdit} className={`flex items-center gap-2 bg-white border border-gray-100 px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all transform hover:-translate-y-1 ${selectedProjects.length === 0 ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
               <Edit3 size={16} className="text-purple-500" /> Edit List
             </button>
+            {hasMoreLeads && (
+              <button onClick={handleLoadMore} disabled={loadingMore} className="flex items-center gap-2 bg-green-600 text-white px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-bold shadow-xl hover:bg-green-700 transition-all transform hover:-translate-y-1 disabled:opacity-50">
+                <ChevronDown size={14} /> {loadingMore ? 'Loading...' : 'Load More'}
+              </button>
+            )}
           </div>
-          <button onClick={() => setIsOutreachActive(!isOutreachActive)} className={`${isOutreachActive ? 'bg-orange-500' : 'bg-blue-600'} text-white px-8 py-3 rounded-[24px] font-black text-[12px] tracking-widest flex items-center gap-3 hover:-translate-y-1 shadow-lg transition-all group`}>
+          <button onClick={() => setIsOutreachActive(!isOutreachActive)} className={`${isOutreachActive ? 'bg-orange-500' : 'bg-blue-600'} text-white px-6 sm:px-8 py-2.5 sm:py-3 rounded-[24px] font-black text-[11px] sm:text-[12px] tracking-widest flex items-center gap-2 sm:gap-3 hover:-translate-y-1 shadow-lg transition-all group`}>
             {isOutreachActive ? <><Pause size={16} fill="white" /> PAUSE OUTREACH</> : <><Play size={16} fill="white" /> START OUTREACH</>}
           </button>
         </div>
@@ -204,6 +388,20 @@ export default function ProjectsPage() {
                 <div className="space-y-1.5 flex flex-col items-start text-left">
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Business Email</label>
                   <input required type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                   <div className="space-y-1.5 flex flex-col items-start text-left">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Phone Number</label>
+                    <input type="tel" value={formData.phone} onChange={e => setFormData({...formData, phone: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" placeholder="+60123456789" />
+                   </div>
+                   <div className="space-y-1.5 flex flex-col items-start text-left">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">WhatsApp Number</label>
+                    <input type="tel" value={formData.whatsapp} onChange={e => setFormData({...formData, whatsapp: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" placeholder="+60123456789" />
+                   </div>
+                </div>
+                <div className="space-y-1.5 flex flex-col items-start text-left">
+                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Location</label>
+                  <input value={formData.location} onChange={e => setFormData({...formData, location: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
                    <div className="space-y-1.5 flex flex-col items-start text-left">

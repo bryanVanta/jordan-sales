@@ -15,17 +15,28 @@ const messagesRouter = require('./routes/messages');
 const trainingRouter = require('./routes/training');
 const llmRouter = require('./routes/llm');
 const productsRouter = require('./routes/products');
+const productInfoRouter = require('./routes/productInfo');
+const scrapingRouter = require('./routes/scraping');
+const { initializeSystem } = require('./services/initializationService');
+const { getProgress } = require('./services/progressService');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '100mb' }));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'salesbot-backend' });
+});
+
+// Progress tracking endpoint for frontend to poll
+app.get('/api/progress/:productInfoId?', (req, res) => {
+  const productInfoId = req.params.productInfoId || 'current';
+  const progress = getProgress(productInfoId);
+  res.json(progress);
 });
 
 // API Routes
@@ -35,6 +46,8 @@ app.use('/api/messages', messagesRouter);
 app.use('/api/training', trainingRouter);
 app.use('/api/llm', llmRouter);
 app.use('/api/products', productsRouter);
+app.use('/api/product-info', productInfoRouter);
+app.use('/api/scraping', scrapingRouter);
 
 // API status endpoint
 app.get('/api/status', (req, res) => {
@@ -50,11 +63,17 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`🚀 Salesbot Backend running on http://localhost:${PORT}`);
-  console.log(`📋 Health check: http://localhost:${PORT}/health`);
-  console.log(`🗄️  Firestore connected to project: ${process.env.FIREBASE_PROJECT_ID}`);
-});
+// Initialize system and start server
+(async () => {
+  // Initialize product info (non-blocking, won't crash server if Firebase unavailable)
+  await initializeSystem();
+
+  app.listen(PORT, () => {
+    console.log(`🚀 Salesbot Backend running on http://localhost:${PORT}`);
+    console.log(`📋 Health check: http://localhost:${PORT}/health`);
+    console.log(`🗄️  Firestore connected to project: ${process.env.FIREBASE_PROJECT_ID}`);
+  });
+})();
 
 module.exports = app;
+

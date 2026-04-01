@@ -1,5 +1,8 @@
 .env
 .env.local
+backend/.env
+frontend/.env
+frontend/.env.local
 node_modules
 .next
 dist

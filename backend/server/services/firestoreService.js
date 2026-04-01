@@ -89,6 +89,16 @@ async function getLead(id) {
   }
 }
 
+async function getAllLeads() {
+  try {
+    const snapshot = await db.collection('leads').orderBy('updatedAt', 'desc').get();
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  } catch (error) {
+    console.error('Error getting all leads:', error);
+    throw error;
+  }
+}
+
 async function getLeadsByCompany(companyId) {
   try {
     const snapshot = await db.collection('leads').where('companyId', '==', companyId).get();
@@ -149,6 +159,7 @@ module.exports = {
   // Leads
   createLead,
   getLead,
+  getAllLeads,
   getLeadsByCompany,
   updateLead,
   // Messages

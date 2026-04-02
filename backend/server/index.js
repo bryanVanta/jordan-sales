@@ -17,6 +17,7 @@ const llmRouter = require('./routes/llm');
 const productsRouter = require('./routes/products');
 const productInfoRouter = require('./routes/productInfo');
 const scrapingRouter = require('./routes/scraping');
+const outreachRouter = require('./routes/outreach');
 const { initializeSystem } = require('./services/initializationService');
 const { getProgress } = require('./services/progressService');
 
@@ -48,6 +49,7 @@ app.use('/api/llm', llmRouter);
 app.use('/api/products', productsRouter);
 app.use('/api/product-info', productInfoRouter);
 app.use('/api/scraping', scrapingRouter);
+app.use('/api/outreach', outreachRouter);
 
 // API status endpoint
 app.get('/api/status', (req, res) => {

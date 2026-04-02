@@ -435,6 +435,54 @@ async function findLeadsWithOpenClaw(productInfo, previousCompanies = []) {
   }
 }
 
+/**
+ * Generate outreach message using OpenClaw
+ */
+async function generateMessageWithOpenClaw(productInfo, leadInfo) {
+  const wsUrl = getJordanGatewayWsUrl();
+  if (!wsUrl) {
+    throw new Error('[OpenClaw] No gateway URL configured');
+  }
+
+  // Add debugging logs to verify the leadInfo object structure
+  console.log('[OpenClaw] leadInfo object:', leadInfo);
+
+  const prompt = JSON.stringify({
+    task: 'Generate a professional outreach message for the following lead.',
+    lead: {
+      name: leadInfo.contactName || 'Valued Partner', // Ensure fallback for undefined contactName
+      company: leadInfo.companyName || 'your company',
+      email: leadInfo.email || 'N/A',
+      phone: leadInfo.phone || 'N/A',
+      location: leadInfo.location || 'N/A',
+      channel: leadInfo.channel || 'N/A',
+    },
+    product: {
+      name: productInfo.productName || 'our product',
+      description: productInfo.description || 'our services',
+      targetCustomer: productInfo.targetCustomer || 'businesses like yours',
+    },
+    output: {
+      instruction: 'Return ONLY the message as plain text. No JSON, no extra formatting.',
+    },
+  });
+
+  try {
+    const response = await axios.post(wsUrl, { prompt }, {
+      headers: {
+        Authorization: `Bearer ${OPENCLAW_JORDAN_GATEWAY_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    return response.data;
+  } catch (error) {
+    console.error('[OpenClaw] Error generating message:', error.response?.data || error.message);
+    throw error;
+  }
+}
+
 module.exports = {
   findLeadsWithOpenClaw,
+  generateMessageWithOpenClaw,
 };

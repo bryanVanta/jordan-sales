@@ -64,36 +64,51 @@ Respond naturally without any markdown or special formatting.`;
 }
 
 /**
- * Call OpenRouter API with reasoning
+ * Call OpenRouter API with reasoning and retry logic
  */
 async function callOpenRouter(messages, enableReasoning = true) {
-  try {
-    if (!OPENROUTER_API_KEY) {
-      throw new Error('OPENROUTER_API_KEY not configured');
-    }
+  const maxRetries = 3;
+  let attempt = 0;
+  let delay = 1000; // Initial delay of 1 second
 
-    const response = await axios.post(
-      `${OPENROUTER_BASE_URL}/chat/completions`,
-      {
-        model: MODEL,
-        messages: messages,
-        reasoning: enableReasoning ? { enabled: true } : undefined,
-        temperature: 0.7,
-        max_tokens: 2000,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
+  while (attempt < maxRetries) {
+    try {
+      if (!OPENROUTER_API_KEY) {
+        throw new Error('OPENROUTER_API_KEY not configured');
       }
-    );
 
-    return response.data.choices[0].message;
-  } catch (error) {
-    console.error('Error calling OpenRouter:', error.response?.data || error.message);
-    throw error;
+      const response = await axios.post(
+        `${OPENROUTER_BASE_URL}/chat/completions`,
+        {
+          model: MODEL,
+          messages: messages,
+          reasoning: enableReasoning ? { enabled: true } : undefined,
+          temperature: 0.7,
+          max_tokens: 2000,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+            'Content-Type': 'application/json',
+          },
+        }
+      );
+
+      return response.data.choices[0].message;
+    } catch (error) {
+      if (error.response?.status === 429) {
+        console.warn(`Rate limit hit. Retrying in ${delay}ms...`);
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        delay *= 2; // Exponential backoff
+        attempt++;
+      } else {
+        console.error('Error calling OpenRouter:', error.response?.data || error.message);
+        throw error;
+      }
+    }
   }
+
+  throw new Error('Failed to call OpenRouter after maximum retries');
 }
 
 /**

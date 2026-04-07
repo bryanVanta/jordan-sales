@@ -9,6 +9,9 @@ export default function ProjectsPage() {
   const [searchTerm, setSearchTerm] = useState('');
   const [isOutreachActive, setIsOutreachActive] = useState(false);
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
+  const [outreachLoading, setOutreachLoading] = useState(false);
+  const [outreachResults, setOutreachResults] = useState<any>(null);
+  const [outreachError, setOutreachError] = useState('');
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
@@ -195,6 +198,48 @@ export default function ProjectsPage() {
     });
   };
 
+  const handleOutreach = async () => {
+    if (selectedProjects.length === 0) {
+      setOutreachError('Please select at least one lead to start outreach');
+      setTimeout(() => setOutreachError(''), 3000);
+      return;
+    }
+
+    setOutreachLoading(true);
+    setOutreachError('');
+    setOutreachResults(null);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/outreach/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          leadIds: selectedProjects,
+          productInfoId: 'current',
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to send outreach');
+      }
+
+      const result = await response.json();
+      setOutreachResults(result);
+      setIsOutreachActive(false);
+      setSelectedProjects([]); // Clear selection after outreach
+
+      // Show success message
+      setTimeout(() => {
+        setOutreachResults(null);
+      }, 5000);
+    } catch (err) {
+      console.error(err);
+      setOutreachError(err instanceof Error ? err.message : 'Failed to send outreach messages');
+    } finally {
+      setOutreachLoading(false);
+    }
+  };
+
   const getTempStyle = (temp: string) => {
     switch(temp) {
       case 'Hot': return 'bg-red-500/10 text-red-500 border-red-500/20';
@@ -270,6 +315,24 @@ export default function ProjectsPage() {
       )}
 
       <div className="flex-1 bg-white/80 backdrop-blur-md rounded-[24px] border border-gray-100 shadow-sm overflow-hidden flex flex-col min-h-[550px] z-10">
+        {outreachError && (
+          <div className="bg-red-50 border-b border-red-200 px-6 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-red-600 font-bold text-sm">⚠️ Error:</span>
+              <span className="text-red-600 text-sm">{outreachError}</span>
+            </div>
+            <button onClick={() => setOutreachError('')} className="text-red-400 hover:text-red-600"><X size={16} /></button>
+          </div>
+        )}
+        {outreachResults && (
+          <div className="bg-green-50 border-b border-green-200 px-6 py-3 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <span className="text-green-600 font-bold text-sm">✅ Success:</span>
+              <span className="text-green-600 text-sm">{outreachResults.message}</span>
+            </div>
+            <button onClick={() => setOutreachResults(null)} className="text-green-400 hover:text-green-600"><X size={16} /></button>
+          </div>
+        )}
         <div ref={scrollContainerRef} className="overflow-x-auto overflow-y-auto flex-1 relative custom-scrollbar">
           {loading ? (
             <div className="flex h-full items-center justify-center px-8 py-16 text-center text-sm font-bold text-gray-500">
@@ -358,8 +421,24 @@ export default function ProjectsPage() {
               </button>
             )}
           </div>
-          <button onClick={() => setIsOutreachActive(!isOutreachActive)} className={`${isOutreachActive ? 'bg-orange-500' : 'bg-blue-600'} text-white px-6 sm:px-8 py-2.5 sm:py-3 rounded-[24px] font-black text-[11px] sm:text-[12px] tracking-widest flex items-center gap-2 sm:gap-3 hover:-translate-y-1 shadow-lg transition-all group`}>
-            {isOutreachActive ? <><Pause size={16} fill="white" /> PAUSE OUTREACH</> : <><Play size={16} fill="white" /> START OUTREACH</>}
+          <button 
+            onClick={handleOutreach}
+            disabled={outreachLoading || selectedProjects.length === 0}
+            className={`${
+              selectedProjects.length === 0 
+                ? 'bg-gray-400 opacity-50 cursor-not-allowed' 
+                : 'bg-blue-600 hover:-translate-y-1'
+            } text-white px-6 sm:px-8 py-2.5 sm:py-3 rounded-[24px] font-black text-[11px] sm:text-[12px] tracking-widest flex items-center gap-2 sm:gap-3 shadow-lg transition-all`}
+          >
+            {outreachLoading ? (
+              <>
+                <Loader size={16} className="animate-spin" /> SENDING...
+              </>
+            ) : (
+              <>
+                <Send size={16} /> SEND OUTREACH TO {selectedProjects.length > 0 ? selectedProjects.length : 0}
+              </>
+            )}
           </button>
         </div>
       </div>

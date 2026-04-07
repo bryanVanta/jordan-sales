@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useRef, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { 
   Search, 
   Plus, 
@@ -58,6 +59,7 @@ interface CustomerData {
   sentiment?: 'hot' | 'warm' | 'neutral' | 'cold'; // Sentiment based on response patterns
   lastOutreachTime?: Date; // Track when we last sent a message
   lastResponseTime?: Date; // Track when customer last responded
+  channel?: 'email' | 'whatsapp' | 'telegram'; // Channel/platform for this conversation
 }
 
 const CUSTOMERS: CustomerData[] = [
@@ -138,6 +140,9 @@ const getSentimentStyle = (sentiment?: string) => {
 };
 
 const ChatInterface = () => {
+  const searchParams = useSearchParams();
+  const platformFromUrl = (searchParams?.get('platform') || 'email') as 'email' | 'whatsapp' | 'telegram';
+  
   const [selectedCustomerId, setSelectedCustomerId] = useState<number>(1);
   const [showContactInfo, setShowContactInfo] = useState(true);
   const [inputValue, setInputValue] = useState("");
@@ -148,6 +153,7 @@ const ChatInterface = () => {
   const [sendingMessage, setSendingMessage] = useState(false);
   const [loadedCustomerIds, setLoadedCustomerIds] = useState<Set<number>>(new Set());
   const [sentimentCounts, setSentimentCounts] = useState({ hot: 0, warm: 0, neutral: 0, cold: 0 });
+  const [selectedChannel, setSelectedChannel] = useState<'email' | 'whatsapp' | 'telegram'>(platformFromUrl);
   
   const currentCustomer = allCustomers.find(c => c.id === selectedCustomerId) || allCustomers[0];
 
@@ -155,12 +161,18 @@ const ChatInterface = () => {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
 
+  // Sync with URL platform parameter from Navbar
+  useEffect(() => {
+    setSelectedChannel(platformFromUrl);
+    console.log(`[Chat] Platform changed from Navbar: ${platformFromUrl}`);
+  }, [platformFromUrl]);
+
   // Fetch sentiment distribution from backend
   useEffect(() => {
     const fetchSentimentCounts = async () => {
       try {
         const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
-        const response = await fetch(`${backendUrl}/api/sentiment/distribution`);
+        const response = await fetch(`${backendUrl}/api/sentiment/distribution?channel=${selectedChannel}`);
         if (response.ok) {
           const data = await response.json();
           if (data.data && typeof data.data === 'object') {
@@ -171,7 +183,7 @@ const ChatInterface = () => {
               neutral: neutral || 0,
               cold: cold || 0
             });
-            console.log('[Chat] Sentiment counts updated:', { hot, warm, neutral, cold });
+            console.log(`[Chat] Sentiment counts updated for channel ${selectedChannel}:`, { hot, warm, neutral, cold });
           }
         }
       } catch (error) {
@@ -183,13 +195,13 @@ const ChatInterface = () => {
     // Refresh every 30 seconds
     const interval = setInterval(fetchSentimentCounts, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [selectedChannel]);
 
-  // Load all leads from Firebase when component mounts
+  // Load all leads from Firebase when component mounts or channel changes
   useEffect(() => {
     const loadAllLeads = async () => {
       try {
-        console.log('[Chat] Loading all leads from Firebase...');
+        console.log(`[Chat] Loading all leads from Firebase for channel: ${selectedChannel}...`);
         
         // Get all leads from outreach_history
         const outreachRef = collection(db, 'outreach_history');
@@ -197,39 +209,45 @@ const ChatInterface = () => {
         
         const leadsMap = new Map<string, any>();
         
-        // Group messages by contactEmail to find leads with messages
+        // Group messages by contactEmail to find leads with messages (filtered by channel)
         outreachSnapshot.docs.forEach((doc) => {
           const data = doc.data();
           const email = data.contactEmail || '';
+          const channel = data.channel || 'email';
           
-          if (email && !leadsMap.has(email)) {
-            console.log(`[Chat] Found outreach message for email: ${email}, leadId: ${data.leadId}`);
+          // Only include messages from the selected channel
+          if (email && channel === selectedChannel && !leadsMap.has(email)) {
+            console.log(`[Chat] Found outreach message for email: ${email}, leadId: ${data.leadId}, channel: ${channel}`);
             leadsMap.set(email, {
               email: email,
               contactEmail: email,
               company: data.company,
               contactPerson: data.contactPerson,
               firebaseLeadId: data.leadId, // Store the actual Firebase leadId
+              channel: channel,
             });
           }
         });
         
-        // Also check inbound_emails
+        // Also check inbound messages (filter by channel)
         const inboundRef = collection(db, 'inbound_emails');
         const inboundSnapshot = await getDocs(inboundRef);
         
         inboundSnapshot.docs.forEach((doc) => {
           const data = doc.data();
           const email = data.contactEmail || '';
+          const channel = data.channel || 'email';
           
-          if (email && !leadsMap.has(email)) {
-            console.log(`[Chat] Found inbound message for email: ${email}, leadId: ${data.leadId}`);
+          // Only include messages from the selected channel
+          if (email && channel === selectedChannel && !leadsMap.has(email)) {
+            console.log(`[Chat] Found inbound message for email: ${email}, leadId: ${data.leadId}, channel: ${channel}`);
             leadsMap.set(email, {
               email: email,
               contactEmail: email,
               company: data.company,
               contactPerson: data.contactPerson,
               firebaseLeadId: data.leadId, // Store the actual Firebase leadId
+              channel: channel,
             });
           }
         });
@@ -283,6 +301,7 @@ const ChatInterface = () => {
                 progress: [],
                 temperature: 50,
                 sentiment: sentiment, // Add calculated sentiment
+                channel: lead.channel, // Store the channel
               };
             } catch (error) {
               console.error(`[Chat] Error loading messages for ${lead.contactEmail}:`, error);
@@ -298,6 +317,7 @@ const ChatInterface = () => {
                 progress: [],
                 temperature: 50,
                 sentiment: 'neutral' as const, // Default to neutral on error
+                channel: lead.channel,
               };
             }
           })
@@ -310,6 +330,11 @@ const ChatInterface = () => {
           // Mark all as loaded since we just loaded messages
           const loadedIds = new Set(leadsWithMessages.map(l => l.id));
           setLoadedCustomerIds(loadedIds);
+        } else {
+          // Clear customers if no conversations found for this channel
+          console.log(`[Chat] No conversations found for channel: ${selectedChannel}`);
+          setAllCustomers([]);
+          setLoadedCustomerIds(new Set());
         }
       } catch (error) {
         console.error('[Chat] Error loading leads:', error);
@@ -317,7 +342,9 @@ const ChatInterface = () => {
     };
 
     loadAllLeads();
-  }, []);
+    setLoadedCustomerIds(new Set()); // Clear loaded customer IDs when channel changes
+    setSelectedCustomerId(1); // Reset selected customer
+  }, [selectedChannel]);
 
   // Load outreach messages from Firebase when customer is selected
   useEffect(() => {
@@ -382,8 +409,10 @@ const ChatInterface = () => {
   };
 
   useEffect(() => {
-    scrollToBottom();
-  }, [currentCustomer.messages]);
+    if (currentCustomer?.messages) {
+      scrollToBottom();
+    }
+  }, [currentCustomer?.messages]);
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -439,6 +468,7 @@ const ChatInterface = () => {
   };
 
   const getMediaData = () => {
+    if (!currentCustomer?.media) return DEFAULT_MEDIA;
     return DEFAULT_MEDIA.map(def => {
       const match = currentCustomer.media.find(m => m.label === def.label);
       return match ? { ...def, count: match.count } : def;
@@ -485,26 +515,27 @@ const ChatInterface = () => {
           </div>
 
           <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar space-y-1.5 pb-28">
-            {allCustomers.map((customer) => {
-              const lastMsg = customer.messages.length > 0 ? customer.messages[customer.messages.length - 1].text.substring(0, 50) : "No messages";
-              return (
-                <button 
-                  key={customer.id} 
-                  onClick={() => {
-                    setSelectedCustomerId(customer.id);
-                    setActiveView('chat');
-                  }}
-                  onDoubleClick={() => {
-                    setSelectedCustomerId(customer.id);
-                    setShowContactInfo(true);
-                    setActiveView('chat');
-                  }}
-                  className={`w-full flex items-center gap-3 p-3 rounded-2xl border border-transparent transition-all group relative overflow-hidden ${
-                    selectedCustomerId === customer.id 
-                      ? "shadow-sm" 
-                      : "bg-white hover:bg-gray-50/50"
-                  }`}
-                >
+            {allCustomers.length > 0 ? (
+              allCustomers.map((customer) => {
+                const lastMsg = customer.messages.length > 0 ? customer.messages[customer.messages.length - 1].text.substring(0, 50) : "No messages";
+                return (
+                  <button 
+                    key={customer.id} 
+                    onClick={() => {
+                      setSelectedCustomerId(customer.id);
+                      setActiveView('chat');
+                    }}
+                    onDoubleClick={() => {
+                      setSelectedCustomerId(customer.id);
+                      setShowContactInfo(true);
+                      setActiveView('chat');
+                    }}
+                    className={`w-full flex items-center gap-3 p-3 rounded-2xl border border-transparent transition-all group relative overflow-hidden ${
+                      selectedCustomerId === customer.id 
+                        ? "shadow-sm" 
+                        : "bg-white hover:bg-gray-50/50"
+                    }`}
+                  >
                   {selectedCustomerId === customer.id && (
                     <div className="absolute inset-0 bg-gradient-to-r from-blue-50 via-blue-50/30 to-transparent pointer-events-none" />
                   )}
@@ -538,7 +569,14 @@ const ChatInterface = () => {
                 </div>
                 </button>
               )
-            })}
+            })
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full py-12 text-center px-4">
+                <Cloud size={48} className="text-gray-300 mb-3" />
+                <p className="text-gray-500 font-medium text-sm">No conversations yet</p>
+                <p className="text-gray-400 text-xs mt-1">Conversations will appear here</p>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -546,6 +584,8 @@ const ChatInterface = () => {
       {/* ================= MIDDLE COLUMN: Chat Area ================= */}
       <div className={`flex-1 lg:flex flex-col bg-white/90 backdrop-blur-2xl rounded-[28px] sm:rounded-[32px] border border-white shadow-xl h-full overflow-hidden relative animate-in zoom-in-95 duration-500 ${activeView === 'chat' ? 'flex' : 'hidden'}`}>
         
+        {currentCustomer ? (
+          <>
         {/* Mobile Header (back button) */}
         <div className="lg:hidden flex items-center justify-between p-4 border-b border-gray-50 bg-white/50">
           <button onClick={() => setActiveView('list')} className="p-2 bg-gray-50 rounded-xl text-gray-400 hover:text-blue-600 transition-all active:scale-95">
@@ -647,10 +687,20 @@ const ChatInterface = () => {
             </div>
           </div>
         </div>
+          </>
+        ) : (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center">
+              <Cloud size={56} className="text-gray-300 mx-auto mb-4" />
+              <p className="text-gray-600 font-bold">Select a conversation to start</p>
+              <p className="text-gray-400 text-sm mt-1">Choose from the list on the left</p>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* ================= RIGHT COLUMN: Contact Info ================= */}
-      {(showContactInfo || activeView === 'info') && (
+      {(showContactInfo || activeView === 'info') && currentCustomer && (
         <div className={`w-full lg:w-[340px] xl:flex flex-col h-full animate-in slide-in-from-right-4 duration-500 ${activeView === 'info' ? 'flex' : (showContactInfo && activeView === 'chat' ? 'hidden xl:flex' : 'hidden')}`}>
           <div className="bg-white/90 backdrop-blur-2xl rounded-[28px] sm:rounded-[32px] border border-white p-4 sm:p-5 shadow-xl flex flex-col h-full overflow-hidden">
             <div className="flex items-center justify-between mb-4">

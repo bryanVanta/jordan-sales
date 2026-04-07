@@ -22,7 +22,7 @@ import {
 
 export default function TrainingPage() {
   const router = useRouter();
-  const API_BASE_URL = 'http://localhost:5000/api';
+  const API_BASE_URL = `${process.env.NEXT_PUBLIC_BACKEND_URL}/api`; // Use environment variable for API base URL
   const trainingAssetKeyMap: Record<string, 'companyInfo' | 'knowledgeBase' | 'salesPlaybook'> = {
     'Company Info': 'companyInfo',
     'Knowledge Base': 'knowledgeBase',

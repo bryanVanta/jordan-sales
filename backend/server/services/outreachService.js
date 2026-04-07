@@ -121,12 +121,18 @@ async function sendOutreachMessage(lead, messageContent, channelInfo) {
  */
 async function saveOutreachRecord(lead, channel, messageContent, result) {
   try {
+    const fullMessage = messageContent.body;
+    const messagePreview = fullMessage.substring(0, 200);
+
     const record = {
       leadId: lead.id,
       company: lead.company,
       contactPerson: lead.person,
+      contactEmail: lead.email,
       channel: channel,
-      messagePreview: messageContent.body.substring(0, 200),
+      messageSubject: messageContent.subject || null, // For email channel
+      messageContent: fullMessage, // Store ENTIRE message with newlines preserved
+      messagePreview: messagePreview,
       status: result.success ? 'sent' : 'failed',
       errorMessage: result.error || null,
       messageId: result.messageId || null,
@@ -135,6 +141,7 @@ async function saveOutreachRecord(lead, channel, messageContent, result) {
     };
 
     const docRef = await db.collection('outreach_history').add(record);
+    console.log(`[Outreach] Record saved to Firestore: ${docRef.id}`);
     
     // Also update the lead's status
     await db.collection('leads').doc(lead.id).update({

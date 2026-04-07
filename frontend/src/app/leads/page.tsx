@@ -2,7 +2,7 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Search, Filter, Play, Pause, Plus, FileUp, Edit3, Check, ChevronUp, ChevronDown, X, Mail, MessageCircle, Send, ChevronRight, Loader } from 'lucide-react';
 
-const API_BASE_URL = 'http://localhost:5000/api';
+const API_BASE_URL = `${process.env.NEXT_PUBLIC_BACKEND_URL}/api`; // Fetching API base URL with /api endpoint from environment variables
 
 export default function ProjectsPage() {
   const [projects, setProjects] = useState<any[]>([]);

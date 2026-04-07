@@ -18,6 +18,8 @@ const productsRouter = require('./routes/products');
 const productInfoRouter = require('./routes/productInfo');
 const scrapingRouter = require('./routes/scraping');
 const outreachRouter = require('./routes/outreach');
+const followUpRouter = require('./routes/followUp');
+const webhooksRouter = require('./routes/webhooks');
 const { initializeSystem } = require('./services/initializationService');
 const { getProgress } = require('./services/progressService');
 
@@ -50,6 +52,8 @@ app.use('/api/products', productsRouter);
 app.use('/api/product-info', productInfoRouter);
 app.use('/api/scraping', scrapingRouter);
 app.use('/api/outreach', outreachRouter);
+app.use('/api/follow-up', followUpRouter);
+app.use('/api/webhooks', webhooksRouter);
 
 // API status endpoint
 app.get('/api/status', (req, res) => {

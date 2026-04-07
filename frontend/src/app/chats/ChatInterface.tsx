@@ -17,8 +17,14 @@ import {
   Image as ImageIcon,
   Info,
   Navigation,
-  CheckCheck
+  CheckCheck,
+  Loader2
 } from "lucide-react";
+import { fetchOutreachMessagesByLeadId, fetchOutreachMessagesByEmail, fetchCompleteConversation, formatTime } from "@/services/outreach";
+import { db } from "@/lib/firebase";
+import { collection, getDocs } from "firebase/firestore";
+
+const API_BASE_URL = `${process.env.NEXT_PUBLIC_BACKEND_URL}/api`; // Use environment variable for API base URL
 
 interface Message {
   id: string;
@@ -39,6 +45,8 @@ interface MediaItem {
 interface CustomerData {
   id: number;
   name: string;
+  email: string;
+  company: string;
   time: string;
   messages: Message[];
   media: { label: string, count: string }[];
@@ -49,58 +57,14 @@ interface CustomerData {
 const CUSTOMERS: CustomerData[] = [
   { 
     id: 1, 
-    name: "Sarah Jenkins", 
-    time: "10:15 AM", 
-    messages: [
-      { id: "s1", sender: "user", text: "Hi, I'm interested in the hotel management system.", time: "10:15 AM" },
-      { id: "s2", sender: "bot", text: "Hello! Jordan can help. Do you need multi-location sync?", time: "10:16 AM" },
-      { id: "s3", sender: "user", text: "Yes, we have 5 locations currently.", time: "10:20 AM" },
-      { id: "s4", sender: "bot", text: "Perfect. We offer a central cloud dashboard for all sites.", time: "10:22 AM" },
-    ],
-    media: [
-      { label: 'Documents', count: '12 files, 45mb' },
-      { label: 'Photos', count: '5 files, 12mb' },
-    ],
-    progress: ["Send introductory email", "Schedule demo call", "Review pricing structure"],
-    temperature: 65,
-  },
-  { 
-    id: 2, 
-    name: "David Chen", 
-    time: "10:02 AM", 
-    messages: [
-      { id: "d1", sender: "user", text: "Can you send the pricing for 50 seats?", time: "10:02 AM" },
-    ],
-    media: [
-      { label: 'Documents', count: '2 files, 5mb' },
-    ],
-    progress: ["Confirm user count", "Generate custom quote"],
-    temperature: 45,
-  },
-  { 
-    id: 3, 
-    name: "Alex Thompson", 
-    time: "Yesterday", 
-    messages: [
-      { id: "a1", sender: "user", text: "Just looking around for now, thanks.", time: "4:30 PM" },
-    ],
+    name: "Booking Team", 
+    email: "zeroyuki.pradibta@gmail.com",
+    company: "St Giles Wembley Penang",
+    time: "10:32 AM", 
+    messages: [],
     media: [],
-    progress: ["Follow up in 2 weeks"],
-    temperature: 20,
-  },
-  { 
-    id: 4, 
-    name: "Marcus Wright", 
-    time: "Yesterday", 
-    messages: [
-      { id: "m1", sender: "user", text: "How do I integrate API with our CRM?", time: "2:15 PM" },
-    ],
-    media: [
-      { label: 'Documents', count: '8 files, 20mb' },
-      { label: 'Other', count: '1 file, 2mb' },
-    ],
-    progress: ["Share API docs", "Assist with sandbox setup"],
-    temperature: 85,
+    progress: [],
+    temperature: 65,
   },
 ];
 
@@ -117,12 +81,139 @@ const ChatInterface = () => {
   const [showPlusMenu, setShowPlusMenu] = useState(false);
   const [allCustomers, setAllCustomers] = useState<CustomerData[]>(CUSTOMERS);
   const [activeView, setActiveView] = useState<'list' | 'chat' | 'info'>('list');
+  const [loadingMessages, setLoadingMessages] = useState(false);
+  const [sendingMessage, setSendingMessage] = useState(false);
+  const [loadedCustomerIds, setLoadedCustomerIds] = useState<Set<number>>(new Set());
   
   const currentCustomer = allCustomers.find(c => c.id === selectedCustomerId) || allCustomers[0];
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
+
+  // Load all leads from Firebase when component mounts
+  useEffect(() => {
+    const loadAllLeads = async () => {
+      try {
+        console.log('[Chat] Loading all leads from Firebase...');
+        
+        // Get all leads from outreach_history
+        const outreachRef = collection(db, 'outreach_history');
+        const outreachSnapshot = await getDocs(outreachRef);
+        
+        const leadsMap = new Map<string, any>();
+        
+        // Group messages by contactEmail to find leads with messages
+        outreachSnapshot.docs.forEach((doc) => {
+          const data = doc.data();
+          const email = data.contactEmail || data.email || '';
+          
+          if (email && !leadsMap.has(email)) {
+            leadsMap.set(email, {
+              email: email,
+              contactEmail: data.contactEmail,
+              company: data.company,
+              contactPerson: data.contactPerson,
+            });
+          }
+        });
+        
+        // Also check inbound_emails
+        const inboundRef = collection(db, 'inbound_emails');
+        const inboundSnapshot = await getDocs(inboundRef);
+        
+        inboundSnapshot.docs.forEach((doc) => {
+          const data = doc.data();
+          const email = data.contactEmail || data.email || '';
+          
+          if (email && !leadsMap.has(email)) {
+            leadsMap.set(email, {
+              email: email,
+              contactEmail: data.contactEmail,
+              company: data.company,
+              contactPerson: data.contactPerson,
+            });
+          }
+        });
+        
+        const leadsWithMessages = Array.from(leadsMap.values()).map((lead, index) => ({
+          id: index + 1,
+          name: lead.contactPerson || 'Unknown',
+          email: lead.contactEmail || lead.email,
+          company: lead.company || 'Unknown Company',
+          time: 'Just now',
+          messages: [],
+          media: [],
+          progress: [],
+          temperature: 50,
+        }));
+        
+        console.log(`[Chat] Loaded ${leadsWithMessages.length} leads with messages`);
+        if (leadsWithMessages.length > 0) {
+          setAllCustomers(leadsWithMessages);
+          setSelectedCustomerId(leadsWithMessages[0].id);
+        }
+      } catch (error) {
+        console.error('[Chat] Error loading leads:', error);
+      }
+    };
+
+    loadAllLeads();
+  }, []);
+
+  // Load outreach messages from Firebase when customer is selected
+  useEffect(() => {
+    const loadOutreachMessages = async () => {
+      // Skip if already loaded for this customer to prevent duplicates
+      if (loadedCustomerIds.has(selectedCustomerId)) {
+        console.log(`[Chat] Already loaded messages for customer ${selectedCustomerId}, skipping...`);
+        return;
+      }
+
+      console.log(`[Chat] Loading complete conversation for email: ${currentCustomer.email}`);
+      setLoadingMessages(true);
+      
+      try {
+        // Fetch using email address - gets both sent (outreach) and received (inbound) messages
+        const conversationMessages = await fetchCompleteConversation(currentCustomer.email);
+        
+        if (conversationMessages && conversationMessages.length > 0) {
+          // Convert messages to chat Message format
+          const convertedMessages: Message[] = conversationMessages.map((msg: any) => ({
+            id: msg.messageId || msg.id,
+            sender: msg.status === 'received' ? "user" : "bot" as const,
+            text: `[${msg.messageSubject || 'Email'}]\n\n${msg.messageContent}`,
+            time: msg.createdAt?.toDate?.() 
+              ? msg.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+              : formatTime(msg.timestamp) || 'Unknown time',
+          }));
+
+          // Set only conversation messages (replace instead of append to prevent duplicates)
+          setAllCustomers(prev => prev.map(c => 
+            c.id === selectedCustomerId
+              ? { ...c, messages: convertedMessages }
+              : c
+          ));
+          
+          // Mark this customer as loaded
+          setLoadedCustomerIds(prev => new Set(prev).add(selectedCustomerId));
+          console.log(`[Chat] Loaded ${convertedMessages.length} total conversation messages from Firestore`);
+        } else {
+          console.log(`[Chat] No conversation messages found for ${currentCustomer.email}`);
+          // Mark as loaded even with no messages
+          setLoadedCustomerIds(prev => new Set(prev).add(selectedCustomerId));
+        }
+      } catch (error) {
+        console.error(`[Chat] Error loading conversation messages:`, error);
+      } finally {
+        setLoadingMessages(false);
+      }
+    };
+
+    if (currentCustomer?.email) {
+      loadOutreachMessages();
+    }
+  }, [selectedCustomerId]);
 
   useEffect(() => {
     setShowPlusMenu(false);
@@ -136,17 +227,57 @@ const ChatInterface = () => {
     scrollToBottom();
   }, [currentCustomer.messages]);
 
-  const handleSendMessage = (e?: React.FormEvent) => {
+  const handleSendMessage = async (e?: React.FormEvent) => {
     e?.preventDefault();
     if (!inputValue.trim()) return;
     
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const messageText = inputValue;
+    
+    // Optimistically add the message to the UI
     setAllCustomers(prev => prev.map(c => 
       c.id === selectedCustomerId 
-        ? { ...c, messages: [...c.messages, { id: Date.now().toString(), sender: "bot", text: inputValue, time }] } 
+        ? { ...c, messages: [...c.messages, { id: Date.now().toString(), sender: "bot", text: messageText, time }] } 
         : c
     ));
     setInputValue("");
+    
+    // Send email via backend
+    try {
+      setSendingMessage(true);
+      const response = await fetch(`${API_BASE_URL}/follow-up/send`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          leadId: currentCustomer.id,
+          company: currentCustomer.company,
+          message: messageText,
+          email: currentCustomer.email,
+        }),
+      });
+      
+      if (!response.ok) {
+        console.error('Failed to send message');
+        // Remove the message if sending failed
+        setAllCustomers(prev => prev.map(c =>
+          c.id === selectedCustomerId
+            ? { ...c, messages: c.messages.slice(0, -1) }
+            : c
+        ));
+      } else {
+        console.log('Message sent successfully');
+      }
+    } catch (error) {
+      console.error('Error sending message:', error);
+      // Remove the message if sending failed
+      setAllCustomers(prev => prev.map(c =>
+        c.id === selectedCustomerId
+          ? { ...c, messages: c.messages.slice(0, -1) }
+          : c
+      ));
+    } finally {
+      setSendingMessage(false);
+    }
   };
 
   const getMediaData = () => {
@@ -197,7 +328,7 @@ const ChatInterface = () => {
 
           <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar space-y-1.5 pb-28">
             {allCustomers.map((customer) => {
-              const lastMsg = customer.messages.length > 0 ? customer.messages[customer.messages.length - 1].text : "No messages";
+              const lastMsg = customer.messages.length > 0 ? customer.messages[customer.messages.length - 1].text.substring(0, 50) : "No messages";
               return (
                 <button 
                   key={customer.id} 
@@ -222,12 +353,12 @@ const ChatInterface = () => {
                   <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold shrink-0 relative z-10 ${
                     selectedCustomerId === customer.id ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-400"
                   }`}>
-                    {customer.name.substring(0, 1)}
+                    {customer.company.substring(0, 1)}
                   </div>
                   <div className="flex-1 text-left min-w-0">
                     <div className="flex justify-between items-center mb-0.5">
                     <span className={`text-[13px] font-black tracking-tight truncate relative z-10 ${selectedCustomerId === customer.id ? "text-blue-900" : "text-gray-900"}`}>
-                      {customer.name}
+                      {customer.company}
                     </span>
                     <span className={`text-[9px] font-bold relative z-10 ${selectedCustomerId === customer.id ? "text-blue-500" : "text-gray-400"}`}>
                       {customer.time}
@@ -253,7 +384,7 @@ const ChatInterface = () => {
              <ChevronRight size={20} className="rotate-180" />
           </button>
           <div className="flex flex-col items-center">
-             <span className="text-[13px] font-black text-gray-900 leading-tight">{currentCustomer.name}</span>
+             <span className="text-[13px] font-black text-gray-900 leading-tight">{currentCustomer.company}</span>
              <span className="text-[10px] font-bold text-blue-500">{currentCustomer.time}</span>
           </div>
           <button onClick={() => setActiveView('info')} className="p-2 bg-gray-50 rounded-xl text-gray-400 hover:text-blue-600 transition-all active:scale-95">
@@ -337,12 +468,13 @@ const ChatInterface = () => {
               />
             </div>
             <div className="flex items-center gap-1.5">
-              <button className="p-2 text-gray-300 hover:text-gray-600 transition-colors"><Mic size={18} /></button>
+              <button className="p-2 text-gray-300 hover:text-gray-600 transition-colors" disabled={sendingMessage}><Mic size={18} /></button>
               <button 
                 onClick={() => handleSendMessage()}
-                className="p-2.5 bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-200 hover:bg-black transition-all active:scale-95"
+                disabled={sendingMessage || !inputValue.trim()}
+                className="p-2.5 bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-200 hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
               >
-                <Send size={18} />
+                {sendingMessage ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
               </button>
             </div>
           </div>
@@ -365,9 +497,9 @@ const ChatInterface = () => {
             <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar pb-32">
               <div className="flex flex-col items-center mb-6 text-center">
                 <div className="w-24 h-24 bg-gray-100 rounded-full shadow-lg mb-3 flex items-center justify-center font-black text-3xl text-gray-300">
-                  {currentCustomer.name.substring(0, 1)}
+                  {currentCustomer.company.substring(0, 1)}
                 </div>
-                <h3 className="text-lg font-black text-gray-900 tracking-tight">{currentCustomer.name}</h3>
+                <h3 className="text-lg font-black text-gray-900 tracking-tight">{currentCustomer.company}</h3>
               </div>
 
               {/* Media Sections: Always SHOW ALL */}

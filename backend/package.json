@@ -29,6 +29,7 @@
     "nodemailer": "^6.9.0",
     "playwright": "^1.40.0",
     "redis": "^4.6.0",
+    "resend": "^6.10.0",
     "twilio": "^4.10.0"
   },
   "devDependencies": {

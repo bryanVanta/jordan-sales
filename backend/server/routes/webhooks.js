@@ -63,6 +63,7 @@ router.post('/inbound-email', async (req, res) => {
       company: leadData?.company || 'Unknown',
       contactPerson: leadData?.contactPerson || 'Unknown',
       contactEmail: inboundEmail.sender,
+      channel: 'email', // Explicitly set channel to email for inbound emails
       subject: inboundEmail.subject,
       content: inboundEmail.content,
       messageId: inboundEmail.messageId,

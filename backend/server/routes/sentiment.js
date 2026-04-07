@@ -65,15 +65,18 @@ router.post('/batch', async (req, res) => {
 /**
  * GET /api/sentiment/distribution
  * Get current sentiment distribution across all leads
+ * Query: channel (optional: 'email' | 'whatsapp' | 'telegram')
  */
 router.get('/distribution', async (req, res) => {
   try {
-    console.log(`[Sentiment API] Fetching sentiment distribution`);
-    const distribution = await getSentimentDistribution();
+    const channel = req.query.channel || null;
+    console.log(`[Sentiment API] Fetching sentiment distribution${channel ? ` for channel: ${channel}` : ''}`);
+    const distribution = await getSentimentDistribution(channel);
 
     res.json({
       success: true,
       data: distribution,
+      channel: channel || 'all',
       timestamp: new Date(),
     });
   } catch (error) {

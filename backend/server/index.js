@@ -21,6 +21,7 @@ const outreachRouter = require('./routes/outreach');
 const followUpRouter = require('./routes/followUp');
 const webhooksRouter = require('./routes/webhooks');
 const sentimentRouter = require('./routes/sentiment');
+const testRouter = require('./routes/test');
 const { initializeSystem } = require('./services/initializationService');
 const { getProgress } = require('./services/progressService');
 const { initializeScheduledJobs } = require('./services/schedulerService');
@@ -57,6 +58,7 @@ app.use('/api/outreach', outreachRouter);
 app.use('/api/follow-up', followUpRouter);
 app.use('/api/webhooks', webhooksRouter);
 app.use('/api/sentiment', sentimentRouter);
+app.use('/api/test', testRouter);
 
 // API status endpoint
 app.get('/api/status', (req, res) => {
@@ -70,6 +72,46 @@ app.get('/api/status', (req, res) => {
       taskQueue: 'ready'
     }
   });
+});
+
+// DEBUG: Check messages by channel
+app.get('/api/debug/messages-by-channel', async (req, res) => {
+  try {
+    const channels = ['email', 'whatsapp', 'telegram'];
+    const results = {};
+
+    for (const channel of channels) {
+      // Check outreach_history
+      const outreachSnap = await db
+        .collection('outreach_history')
+        .where('channel', '==', channel)
+        .limit(10)
+        .get();
+
+      // Check inbound_emails (they should all have channel='email')
+      const inboundSnap = await db
+        .collection('inbound_emails')
+        .limit(5)
+        .get();
+
+      results[channel] = {
+        outreach: outreachSnap.size,
+        outreachSample: outreachSnap.docs.map(d => ({
+          id: d.id,
+          company: d.data().company,
+          contactEmail: d.data().contactEmail,
+          channel: d.data().channel,
+          messagePreview: d.data().messagePreview?.substring(0, 50)
+        }))
+      };
+    }
+
+    console.log('[DEBUG] Messages by channel:', results);
+    res.json(results);
+  } catch (error) {
+    console.error('[DEBUG] Error checking messages:', error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // Initialize system and start server

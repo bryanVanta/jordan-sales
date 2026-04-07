@@ -287,10 +287,35 @@ const triggerSentimentAnalysis = async (leadId, email) => {
 };
 
 /**
- * Get sentiment distribution across all leads
+ * Get sentiment distribution across all leads (optionally filtered by channel)
  */
-const getSentimentDistribution = async () => {
+const getSentimentDistribution = async (channel = null) => {
   try {
+    // If a channel is specified, first get all unique email addresses with messages in that channel
+    let emailsInChannel = new Set();
+    
+    if (channel) {
+      // Get emails from outreach_history for this channel
+      const outreachSnapshot = await db
+        .collection('outreach_history')
+        .where('channel', '==', channel)
+        .get();
+      
+      outreachSnapshot.forEach(doc => {
+        const email = doc.data().contactEmail;
+        if (email) emailsInChannel.add(email);
+      });
+      
+      // Also get emails from inbound_emails (they are always 'email' channel)
+      if (channel === 'email') {
+        const inboundSnapshot = await db.collection('inbound_emails').get();
+        inboundSnapshot.forEach(doc => {
+          const email = doc.data().contactEmail;
+          if (email) emailsInChannel.add(email);
+        });
+      }
+    }
+    
     const leadsSnapshot = await db.collection('leads').get();
     
     const distribution = {
@@ -303,6 +328,12 @@ const getSentimentDistribution = async () => {
 
     leadsSnapshot.forEach(doc => {
       const sentiment = doc.data().sentiment;
+      const email = doc.data().email; // Assuming leads have email field
+      
+      // If filtering by channel, only count leads with messages in that channel
+      if (channel && !emailsInChannel.has(email)) {
+        return; // Skip this lead as it has no messages in the selected channel
+      }
       
       // Only count leads that have a sentiment value (have been analyzed/have messages)
       if (sentiment && ['hot', 'warm', 'neutral', 'cold'].includes(sentiment)) {

@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
 const resendService = require('../services/resendService');
+const { triggerSentimentAnalysis } = require('../services/sentimentService');
 
 /**
  * POST /api/webhooks/inbound-email
@@ -92,6 +93,13 @@ router.post('/inbound-email', async (req, res) => {
     });
 
     console.log(`[Webhook] Inbound email also saved to outreach_history for chat display`);
+
+    // Trigger sentiment analysis if we found a lead (non-blocking)
+    if (leadId) {
+      triggerSentimentAnalysis(leadId, inboundEmail.sender)
+        .then(sentiment => console.log(`[Webhook] Sentiment updated for lead ${leadId}: ${sentiment}`))
+        .catch(err => console.error(`[Webhook] Error updating sentiment:`, err.message));
+    }
 
     res.json({
       success: true,

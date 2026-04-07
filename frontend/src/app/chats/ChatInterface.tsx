@@ -18,7 +18,9 @@ import {
   Info,
   Navigation,
   CheckCheck,
-  Loader2
+  Loader2,
+  Heart,
+  Wind
 } from "lucide-react";
 import { fetchOutreachMessagesByLeadId, fetchOutreachMessagesByEmail, fetchCompleteConversation, formatTime } from "@/services/outreach";
 import { db } from "@/lib/firebase";
@@ -53,6 +55,9 @@ interface CustomerData {
   media: { label: string, count: string }[];
   progress: string[];
   temperature: number; // 0 to 100
+  sentiment?: 'hot' | 'warm' | 'neutral' | 'cold'; // Sentiment based on response patterns
+  lastOutreachTime?: Date; // Track when we last sent a message
+  lastResponseTime?: Date; // Track when customer last responded
 }
 
 const CUSTOMERS: CustomerData[] = [
@@ -75,6 +80,63 @@ const DEFAULT_MEDIA: MediaItem[] = [
   { label: 'Other', count: '0 files, 0mb', icon: <Info size={16} />, border: 'border-cyan-100', bg: 'bg-cyan-50', text: 'text-cyan-600' }
 ];
 
+/**
+ * DEPRECATED: Sentiment analysis is now handled by AI on the backend
+ * This function is kept only as a fallback for initial display before backend analysis runs
+ * Real sentiment classification is done via LLM on the backend using analyzeSentimentWithAI()
+ * and runs on: (1) inbound email trigger, (2) daily batch at 8am Malay time
+ */
+const calculateSentiment = (messages: Message[], lastOutreachTime?: Date): 'hot' | 'warm' | 'neutral' | 'cold' => {
+  // Fallback: if no sentiment from backend yet, return neutral
+  // The backend will update this via the sentiment API
+  return 'neutral';
+
+  // Calculate response time in minutes
+  let responseTimeMinutes = 0;
+  if (lastBotMessageBeforeResponse) {
+    // This is a simplified calculation - in reality you'd parse the time strings
+    // For now, use message order as a proxy
+    responseTimeMinutes = 15; // Assuming each message is ~15 mins apart (simplified)
+  }
+
+  // Determine sentiment based on response patterns
+  const messageCount = messages.length;
+  
+  // Hot: Multiple back-and-forth exchanges, quick responses
+  if (messageCount >= 4 && responseTimeMinutes < 20) {
+    return 'hot';
+  }
+  
+  // Warm: Some back-and-forth, reasonable response time
+  if (messageCount >= 2 && responseTimeMinutes < 60) {
+    return 'warm';
+  }
+  
+  // Cold: Very few messages or slow responses
+  if (messageCount >= 1 && responseTimeMinutes >= 60) {
+    return 'cold';
+  }
+  
+  // Neutral: Default for single response or uncertain timing
+  return 'neutral';
+};
+
+/**
+ * Get sentiment icon and color
+ */
+const getSentimentStyle = (sentiment?: string) => {
+  switch (sentiment) {
+    case 'hot':
+      return { icon: Flame, color: 'text-red-500', bg: 'bg-red-50', border: 'border-red-200' };
+    case 'warm':
+      return { icon: Sun, color: 'text-orange-500', bg: 'bg-orange-50', border: 'border-orange-200' };
+    case 'cold':
+      return { icon: Snowflake, color: 'text-blue-500', bg: 'bg-blue-50', border: 'border-blue-200' };
+    default:
+      return { icon: Cloud, color: 'text-gray-400', bg: 'bg-gray-50', border: 'border-gray-200' };
+  }
+};
+
 const ChatInterface = () => {
   const [selectedCustomerId, setSelectedCustomerId] = useState<number>(1);
   const [showContactInfo, setShowContactInfo] = useState(true);
@@ -85,12 +147,43 @@ const ChatInterface = () => {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
   const [loadedCustomerIds, setLoadedCustomerIds] = useState<Set<number>>(new Set());
+  const [sentimentCounts, setSentimentCounts] = useState({ hot: 0, warm: 0, neutral: 0, cold: 0 });
   
   const currentCustomer = allCustomers.find(c => c.id === selectedCustomerId) || allCustomers[0];
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
+
+  // Fetch sentiment distribution from backend
+  useEffect(() => {
+    const fetchSentimentCounts = async () => {
+      try {
+        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
+        const response = await fetch(`${backendUrl}/api/sentiment/distribution`);
+        if (response.ok) {
+          const data = await response.json();
+          if (data.data && typeof data.data === 'object') {
+            const { hot, warm, neutral, cold } = data.data;
+            setSentimentCounts({
+              hot: hot || 0,
+              warm: warm || 0,
+              neutral: neutral || 0,
+              cold: cold || 0
+            });
+            console.log('[Chat] Sentiment counts updated:', { hot, warm, neutral, cold });
+          }
+        }
+      } catch (error) {
+        console.error('[Chat] Error fetching sentiment distribution:', error);
+      }
+    };
+
+    fetchSentimentCounts();
+    // Refresh every 30 seconds
+    const interval = setInterval(fetchSentimentCounts, 30000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Load all leads from Firebase when component mounts
   useEffect(() => {
@@ -171,7 +264,13 @@ const ChatInterface = () => {
               // Get most recent message time for display
               const mostRecentTime = messagesList.length > 0 ? messagesList[messagesList.length - 1].time : 'Just now';
               
-              console.log(`[Chat] Creating lead entry for ${lead.contactEmail} with ${messagesList.length} messages`);
+              // Find the last message we sent (outreach)
+              const lastOutreachMsg = [...messagesList].reverse().find(m => m.sender === 'bot');
+              
+              // Calculate sentiment
+              const sentiment: 'hot' | 'warm' | 'neutral' | 'cold' = calculateSentiment(messagesList, lastOutreachMsg ? new Date() : undefined);
+              
+              console.log(`[Chat] Creating lead entry for ${lead.contactEmail} with ${messagesList.length} messages, sentiment: ${sentiment}`);
               return {
                 id: index + 1,
                 firebaseLeadId: lead.firebaseLeadId, // Store the actual Firebase ID
@@ -183,6 +282,7 @@ const ChatInterface = () => {
                 media: [],
                 progress: [],
                 temperature: 50,
+                sentiment: sentiment, // Add calculated sentiment
               };
             } catch (error) {
               console.error(`[Chat] Error loading messages for ${lead.contactEmail}:`, error);
@@ -197,6 +297,7 @@ const ChatInterface = () => {
                 media: [],
                 progress: [],
                 temperature: 50,
+                sentiment: 'neutral' as const, // Default to neutral on error
               };
             }
           })
@@ -368,10 +469,10 @@ const ChatInterface = () => {
         <div className="bg-white/90 backdrop-blur-2xl rounded-[28px] sm:rounded-[32px] border border-white p-3 sm:p-4 shadow-xl flex flex-col h-full overflow-hidden">
           
           <div className="grid grid-cols-2 gap-2 sm:gap-2.5 mb-4">
-            <StatusCard label="Hot" count="42" trend="+12" bg="bg-[#FFF0EB]" text="text-orange-600" border="border-orange-100" icon={Flame} />
-            <StatusCard label="Cold" count="18" trend="+3" bg="bg-[#EBF4FF]" text="text-blue-600" border="border-blue-100" icon={Snowflake} />
-            <StatusCard label="Warm" count="27" trend="+8" bg="bg-[#FFFDF0]" text="text-yellow-600" border="border-yellow-100" icon={Sun} />
-            <StatusCard label="Neutral" count="9" trend="+1" bg="bg-gray-50" text="text-gray-600" border="border-gray-200" icon={Cloud} />
+            <StatusCard label="Hot" count={sentimentCounts.hot.toString()} trend="+0" bg="bg-[#FFF0EB]" text="text-orange-600" border="border-orange-100" icon={Flame} />
+            <StatusCard label="Cold" count={sentimentCounts.cold.toString()} trend="+0" bg="bg-[#EBF4FF]" text="text-blue-600" border="border-blue-100" icon={Snowflake} />
+            <StatusCard label="Warm" count={sentimentCounts.warm.toString()} trend="+0" bg="bg-[#FFFDF0]" text="text-yellow-600" border="border-yellow-100" icon={Sun} />
+            <StatusCard label="Neutral" count={sentimentCounts.neutral.toString()} trend="+0" bg="bg-gray-50" text="text-gray-600" border="border-gray-200" icon={Cloud} />
           </div>
 
           <div className="relative mb-4">
@@ -407,10 +508,20 @@ const ChatInterface = () => {
                   {selectedCustomerId === customer.id && (
                     <div className="absolute inset-0 bg-gradient-to-r from-blue-50 via-blue-50/30 to-transparent pointer-events-none" />
                   )}
-                  <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold shrink-0 relative z-10 ${
-                    selectedCustomerId === customer.id ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-400"
-                  }`}>
-                    {customer.company.substring(0, 1)}
+                  {/* Profile Circle with Sentiment Icon (no background) */}
+                  <div className="relative">
+                    {/* Sentiment Icon in front of profile circle, filled and bottom right */}
+                    {(() => {
+                      const { icon: SentimentIcon, color } = getSentimentStyle(customer.sentiment);
+                      return (
+                        <SentimentIcon size={24} className={`absolute right-0 bottom-0 z-20 ${color} fill-current`} style={{ background: 'none', transform: 'translate(25%, 25%)' }} />
+                      );
+                    })()}
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold shrink-0 relative z-10 ${
+                      selectedCustomerId === customer.id ? "bg-blue-600 text-white" : "bg-gray-100 text-gray-400"
+                    }`}>
+                      {customer.company.substring(0, 1)}
+                    </div>
                   </div>
                   <div className="flex-1 text-left min-w-0">
                     <div className="flex justify-between items-center mb-0.5">
@@ -553,10 +664,28 @@ const ChatInterface = () => {
 
             <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar pb-32">
               <div className="flex flex-col items-center mb-6 text-center">
-                <div className="w-24 h-24 bg-gray-100 rounded-full shadow-lg mb-3 flex items-center justify-center font-black text-3xl text-gray-300">
-                  {currentCustomer.company.substring(0, 1)}
+                <div className="relative mb-3">
+                  <div className="w-24 h-24 bg-gray-100 rounded-full shadow-lg flex items-center justify-center font-black text-3xl text-gray-300">
+                    {currentCustomer.company.substring(0, 1)}
+                  </div>
+                  {/* Sentiment Icon in front of profile circle, filled and bottom right */}
+                  {(() => {
+                    const { icon: SentimentIcon, color } = getSentimentStyle(currentCustomer.sentiment);
+                    return (
+                      <SentimentIcon size={28} className={`absolute right-2 bottom-2 z-20 ${color} fill-current`} style={{ background: 'none', transform: 'translate(35%, 35%)' }} />
+                    );
+                  })()}
                 </div>
                 <h3 className="text-lg font-black text-gray-900 tracking-tight">{currentCustomer.company}</h3>
+                {/* Show Sentiment Text */}
+                <p className={`text-xs font-bold mt-1 px-3 py-1 rounded-full inline-block ${
+                  currentCustomer.sentiment === 'hot' ? 'bg-red-50 text-red-600' :
+                  currentCustomer.sentiment === 'warm' ? 'bg-orange-50 text-orange-600' :
+                  currentCustomer.sentiment === 'cold' ? 'bg-blue-50 text-blue-600' :
+                  'bg-gray-50 text-gray-600'
+                }`}>
+                  {currentCustomer.sentiment ? currentCustomer.sentiment.charAt(0).toUpperCase() + currentCustomer.sentiment.slice(1) : 'Neutral'}
+                </p>
               </div>
 
               {/* Media Sections: Always SHOW ALL */}

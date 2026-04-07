@@ -141,26 +141,74 @@ const ChatInterface = () => {
           }
         });
         
-        const leadsWithMessages = Array.from(leadsMap.values()).map((lead, index) => {
-          console.log(`[Chat] Creating lead entry for ${lead.contactEmail} with leadId: ${lead.firebaseLeadId}`);
-          return {
-            id: index + 1,
-            firebaseLeadId: lead.firebaseLeadId, // Store the actual Firebase ID
-            name: lead.contactPerson || 'Unknown',
-            email: lead.contactEmail,
-            company: lead.company || 'Unknown Company',
-            time: 'Just now',
-            messages: [],
-            media: [],
-            progress: [],
-            temperature: 50,
-          };
-        });
+        // Load messages for each lead and create preview
+        const leadsWithMessages = await Promise.all(
+          Array.from(leadsMap.values()).map(async (lead, index) => {
+            try {
+              // Fetch complete conversation for this lead
+              const conversationMessages = await fetchCompleteConversation(lead.contactEmail);
+              
+              // Convert to Message format - keep timestamp for sorting
+              const messagesWithTimestamp = conversationMessages
+                .map((msg: any) => {
+                  const timestamp = msg.createdAt || msg.timestamp;
+                  return {
+                    id: msg.messageId || msg.id,
+                    sender: (msg.status === 'received' ? 'user' : 'bot') as 'user' | 'bot',
+                    text: `[${msg.messageSubject || 'Email'}]\n\n${msg.messageContent}`,
+                    time: msg.createdAt?.toLocaleTimeString?.([], { hour: '2-digit', minute: '2-digit' })
+                      ? msg.createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                      : formatTime(msg.timestamp) || 'Unknown time',
+                    sortTime: timestamp instanceof Date ? timestamp.getTime() : 0,
+                  };
+                });
+              
+              // Sort by timestamp ascending (oldest first)
+              const messagesList: Message[] = messagesWithTimestamp
+                .sort((a, b) => a.sortTime - b.sortTime)
+                .map(({ sortTime, ...msg }) => msg as Message);
+              
+              // Get most recent message time for display
+              const mostRecentTime = messagesList.length > 0 ? messagesList[messagesList.length - 1].time : 'Just now';
+              
+              console.log(`[Chat] Creating lead entry for ${lead.contactEmail} with ${messagesList.length} messages`);
+              return {
+                id: index + 1,
+                firebaseLeadId: lead.firebaseLeadId, // Store the actual Firebase ID
+                name: lead.contactPerson || 'Unknown',
+                email: lead.contactEmail,
+                company: lead.company || 'Unknown Company',
+                time: mostRecentTime,
+                messages: messagesList,
+                media: [],
+                progress: [],
+                temperature: 50,
+              };
+            } catch (error) {
+              console.error(`[Chat] Error loading messages for ${lead.contactEmail}:`, error);
+              return {
+                id: index + 1,
+                firebaseLeadId: lead.firebaseLeadId,
+                name: lead.contactPerson || 'Unknown',
+                email: lead.contactEmail,
+                company: lead.company || 'Unknown Company',
+                time: 'Just now',
+                messages: [],
+                media: [],
+                progress: [],
+                temperature: 50,
+              };
+            }
+          })
+        );
         
         console.log(`[Chat] Loaded ${leadsWithMessages.length} leads with messages`, leadsWithMessages);
         if (leadsWithMessages.length > 0) {
           setAllCustomers(leadsWithMessages);
           setSelectedCustomerId(leadsWithMessages[0].id);
+          // Mark all as loaded since we just loaded messages
+          const loadedIds = new Set(leadsWithMessages.map(l => l.id));
+          setLoadedCustomerIds(loadedIds);
         }
       } catch (error) {
         console.error('[Chat] Error loading leads:', error);

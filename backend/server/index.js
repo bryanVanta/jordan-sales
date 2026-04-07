@@ -20,8 +20,10 @@ const scrapingRouter = require('./routes/scraping');
 const outreachRouter = require('./routes/outreach');
 const followUpRouter = require('./routes/followUp');
 const webhooksRouter = require('./routes/webhooks');
+const sentimentRouter = require('./routes/sentiment');
 const { initializeSystem } = require('./services/initializationService');
 const { getProgress } = require('./services/progressService');
+const { initializeScheduledJobs } = require('./services/schedulerService');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -54,6 +56,7 @@ app.use('/api/scraping', scrapingRouter);
 app.use('/api/outreach', outreachRouter);
 app.use('/api/follow-up', followUpRouter);
 app.use('/api/webhooks', webhooksRouter);
+app.use('/api/sentiment', sentimentRouter);
 
 // API status endpoint
 app.get('/api/status', (req, res) => {
@@ -73,6 +76,9 @@ app.get('/api/status', (req, res) => {
 (async () => {
   // Initialize product info (non-blocking, won't crash server if Firebase unavailable)
   await initializeSystem();
+  
+  // Initialize scheduled jobs (e.g., daily sentiment analysis)
+  initializeScheduledJobs();
 
   app.listen(PORT, () => {
     console.log(`🚀 Salesbot Backend running on http://localhost:${PORT}`);

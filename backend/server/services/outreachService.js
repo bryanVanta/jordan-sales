@@ -58,14 +58,17 @@ async function generateOutreachMessage(lead, productInfo, channel) {
 
     const generatedMessage = await generateMessageWithOpenClaw(productInfo, companyDetails);
 
+    console.log('[Outreach] Generated message type:', typeof generatedMessage);
+    console.log('[Outreach] Generated message preview:', String(generatedMessage).slice(0, 100));
+
     if (channel === 'email') {
       return {
         subject: `Exciting Opportunity for ${companyDetails.companyName}`,
-        body: generatedMessage,
+        body: String(generatedMessage), // Ensure it's a string
       };
     } else if (channel === 'whatsapp') {
       return {
-        body: generatedMessage,
+        body: String(generatedMessage), // Ensure it's a string
       };
     } else if (channel === 'phone') {
       return {

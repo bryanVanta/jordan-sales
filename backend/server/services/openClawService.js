@@ -436,49 +436,189 @@ async function findLeadsWithOpenClaw(productInfo, previousCompanies = []) {
 }
 
 /**
- * Generate outreach message using OpenClaw
+ * Generate outreach message using OpenClaw via SSH
+ */
+async function generateMessageWithOpenClawCliViaSsh(productInfo, leadInfo) {
+  return new Promise((resolve, reject) => {
+    try {
+      // Add debugging logs to verify the leadInfo object structure
+      console.log('[OpenClaw] leadInfo object:', leadInfo);
+
+      const params = {
+        agentId: OPENCLAW_JORDAN_AGENT_ID || 'main',
+        idempotencyKey: `jordan-message-${randomUUID()}`,
+        message: JSON.stringify({
+          task: 'Generate a persuasive, energetic outreach email for the following lead. Write in the style of Jordan Belfort from Wolf of Wall Street—confident, punchy, and high-energy—but with a Malaysian twist: friendly, respectful, a bit cheeky, and using local flavor. Use all the information provided about the product and the lead.\n\nFORMAT THE EMAIL AS FOLLOWS:\nDear [Company Name],\n\n[Body paragraph 1 - hook and relevance]\n[Body paragraph 2 - value proposition]\n[Body paragraph 3 - call to action]\n\nBest regards,\nVanta Tech Team\n\nIMPORTANT: \n- Start with "Dear [Company Name]," followed by a blank line\n- Use natural punctuation (commas, periods) instead of em-dashes\n- Write conversational and human-like, avoiding obvious AI markers\n- Keep it irresistible but not pushy',
+          lead: {
+            name: leadInfo.contactName || 'Valued Partner',
+            company: leadInfo.companyName || 'your company',
+            email: leadInfo.email || 'N/A',
+            phone: leadInfo.phone || 'N/A',
+            location: leadInfo.location || 'N/A',
+            channel: leadInfo.channel || 'N/A',
+          },
+          product: {
+            name: productInfo.productName || 'our product',
+            description: productInfo.description || 'our services',
+            targetCustomer: productInfo.targetCustomer || 'businesses like yours',
+          },
+          output: {
+            instruction: 'Return ONLY the complete formatted email message as plain text. Proper line breaks after greeting. No JSON, no extra formatting, no markdown.',
+          },
+        }),
+        timeout: Math.ceil(OPENCLAW_JORDAN_RPC_TIMEOUT_MS / 1000),
+      };
+
+      const paramsJson = JSON.stringify(params);
+
+      // Use OPENCLAW_JORDAN_REMOTE_GATEWAY_URL for the remote SSH command
+      const remoteGatewayUrl = OPENCLAW_JORDAN_REMOTE_GATEWAY_URL;
+      if (!remoteGatewayUrl) {
+        reject(new Error('[OpenClaw] No remote gateway URL configured'));
+        return;
+      }
+
+      const tokenArg = OPENCLAW_JORDAN_GATEWAY_TOKEN ? ` --token '${OPENCLAW_JORDAN_GATEWAY_TOKEN}'` : '';
+      const remoteCommand = `PARAMS="$(cat)"; OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 /home/jeff/.npm-global/bin/openclaw gateway call agent --json --expect-final --url '${remoteGatewayUrl}' --params "$PARAMS"${tokenArg} --timeout ${OPENCLAW_JORDAN_RPC_TIMEOUT_MS}`;
+
+      console.log('[OpenClaw] Spawning SSH process to generate message...');
+
+      const sshProcess = spawn('ssh', [
+        '-o', 'BatchMode=yes',
+        'jeff@192.168.100.199',
+        remoteCommand,
+      ], {
+        timeout: OPENCLAW_JORDAN_RPC_TIMEOUT_MS + 15000,
+        maxBuffer: 1024 * 1024 * 4,
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let completed = false;
+
+      // Set explicit timeout for SSH process
+      const timeoutHandle = setTimeout(() => {
+        if (!completed) {
+          completed = true;
+          console.error(`[OpenClaw] ⏱️ SSH timeout after ${OPENCLAW_JORDAN_RPC_TIMEOUT_MS}ms`);
+          sshProcess.kill();
+          reject(new Error(`SSH process timed out after ${OPENCLAW_JORDAN_RPC_TIMEOUT_MS}ms`));
+        }
+      }, OPENCLAW_JORDAN_RPC_TIMEOUT_MS);
+
+      sshProcess.stdout.on('data', (data) => {
+        stdout += data.toString();
+        console.log('[OpenClaw] stdout received:', data.toString().slice(0, 100));
+      });
+
+      sshProcess.stderr.on('data', (data) => {
+        const errorMsg = data.toString();
+        stderr += errorMsg;
+        console.log('[OpenClaw] stderr:', errorMsg.slice(0, 200));
+      });
+
+      sshProcess.on('close', (code) => {
+        if (completed) return; // Already handled by timeout or other error
+        completed = true;
+        clearTimeout(timeoutHandle);
+
+        if (code === 255 || code !== 0 || stderr.includes('Permission denied')) {
+          if (code === 255 || stderr.includes('Permission denied')) {
+            console.error('[OpenClaw] ❌ SSH key-based auth is required');
+          } else {
+            console.error('[OpenClaw] Remote command failed with exit code:', code);
+            if (stderr) console.error('[OpenClaw] stderr:', stderr.slice(0, 500));
+          }
+          reject(new Error('SSH command failed'));
+          return;
+        }
+
+        if (!stdout) {
+          console.error('[OpenClaw] No output received from remote command');
+          reject(new Error('SSH: No output received'));
+          return;
+        }
+
+        try {
+          console.log('[OpenClaw] Raw stdout:', stdout.slice(0, 300));
+          console.log('[OpenClaw] Message generated, parsing response...');
+          const parsed = parseJsonObject(stdout);
+          
+          console.log('[OpenClaw] Parsed type:', typeof parsed);
+          console.log('[OpenClaw] Parsed value:', JSON.stringify(parsed).slice(0, 300));
+
+          // Extract the message text from various possible response formats
+          let message = '';
+          
+          if (typeof parsed === 'string') {
+            // If it's already a string, use it directly
+            message = parsed;
+          } else if (parsed?.result?.payloads?.[0]?.text) {
+            // OpenClaw standard format: result.payloads[0].text
+            message = parsed.result.payloads[0].text;
+          } else if (parsed?.result && typeof parsed.result === 'string') {
+            // If it has a result field that's a string
+            message = parsed.result;
+          } else if (parsed?.message && typeof parsed.message === 'string') {
+            // If it has a message field that's a string
+            message = parsed.message;
+          } else if (parsed?.data && typeof parsed.data === 'string') {
+            // If it has a data field that's a string
+            message = parsed.data;
+          } else if (parsed?.output && typeof parsed.output === 'string') {
+            // If it has an output field that's a string
+            message = parsed.output;
+          } else {
+            // Last resort - stringify the object
+            message = typeof parsed === 'string' ? parsed : JSON.stringify(parsed);
+          }
+
+          if (!message || message.length === 0) {
+            console.error('[OpenClaw] No message text extracted from response');
+            reject(new Error('SSH: Empty message response'));
+            return;
+          }
+
+          console.log('[OpenClaw] ✓ Message extracted:', message.slice(0, 100));
+          resolve(message);
+        } catch (parseError) {
+          console.error('[OpenClaw] Error parsing message response:', parseError.message);
+          reject(new Error('SSH: Parse error'));
+        }
+      });
+
+      sshProcess.on('error', (error) => {
+        if (completed) return;
+        completed = true;
+        clearTimeout(timeoutHandle);
+        console.error('[OpenClaw] SSH spawn error:', error.message);
+        reject(new Error('SSH spawn failed: ' + error.message));
+      });
+
+      console.log(`[OpenClaw] Sending params to stdin (timeout: ${OPENCLAW_JORDAN_RPC_TIMEOUT_MS}ms)...`);
+      sshProcess.stdin.write(paramsJson);
+      sshProcess.stdin.end();
+      console.log('[OpenClaw] Params written to stdin, waiting for response...');
+
+    } catch (error) {
+      console.error('[OpenClaw] Unexpected error:', error.message);
+      reject(new Error('SSH setup failed: ' + error.message));
+    }
+  });
+}
+
+/**
+ * Generate outreach message using OpenClaw (SSH primary, HTTP fallback)
  */
 async function generateMessageWithOpenClaw(productInfo, leadInfo) {
-  const wsUrl = getJordanGatewayWsUrl();
-  if (!wsUrl) {
-    throw new Error('[OpenClaw] No gateway URL configured');
-  }
-
-  // Add debugging logs to verify the leadInfo object structure
-  console.log('[OpenClaw] leadInfo object:', leadInfo);
-
-  const prompt = JSON.stringify({
-    task: 'Generate a professional outreach message for the following lead.',
-    lead: {
-      name: leadInfo.contactName || 'Valued Partner', // Ensure fallback for undefined contactName
-      company: leadInfo.companyName || 'your company',
-      email: leadInfo.email || 'N/A',
-      phone: leadInfo.phone || 'N/A',
-      location: leadInfo.location || 'N/A',
-      channel: leadInfo.channel || 'N/A',
-    },
-    product: {
-      name: productInfo.productName || 'our product',
-      description: productInfo.description || 'our services',
-      targetCustomer: productInfo.targetCustomer || 'businesses like yours',
-    },
-    output: {
-      instruction: 'Return ONLY the message as plain text. No JSON, no extra formatting.',
-    },
-  });
-
+  // Try SSH first
   try {
-    const response = await axios.post(wsUrl, { prompt }, {
-      headers: {
-        Authorization: `Bearer ${OPENCLAW_JORDAN_GATEWAY_TOKEN}`,
-        'Content-Type': 'application/json',
-      },
-    });
-
-    return response.data;
-  } catch (error) {
-    console.error('[OpenClaw] Error generating message:', error.response?.data || error.message);
-    throw error;
+    console.log('[OpenClaw] Attempting SSH transport for message generation...');
+    return await generateMessageWithOpenClawCliViaSsh(productInfo, leadInfo);
+  } catch (sshError) {
+    console.warn(`[OpenClaw] SSH message generation failed: ${sshError.message}`);
+    console.log('[OpenClaw] ⚠️ SSH failed, cannot generate message - would fallback to HTTP but localhost not available');
+    throw new Error('Message generation failed: ' + sshError.message);
   }
 }
 

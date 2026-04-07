@@ -30,6 +30,11 @@ const serviceAccount = {
   auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs"
 };
 
+
+// Debug logs for environment variables
+console.log('[FIREBASE] Client Email:', process.env.FIREBASE_CLIENT_EMAIL);
+console.log('[FIREBASE] Private Key Length:', privateKey.length);
+
 // Initialize Firebase Admin SDK
 if (!admin.apps.length) {
   admin.initializeApp({

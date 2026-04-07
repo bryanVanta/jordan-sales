@@ -19,12 +19,18 @@ class EmailService {
 
   async sendEmail(to, subject, body, fromEmail = process.env.DEFAULT_FROM_EMAIL) {
     try {
+      // Convert newlines to <br> tags for proper HTML rendering
+      const htmlBody = body
+        .split('\n')
+        .map(line => line || '<br>') // Preserve empty lines as breaks
+        .join('<br>');
+
       const info = await this.transporter.sendMail({
         from: fromEmail,
         to,
         subject,
         text: body,
-        html: `<p>${body}</p>`,
+        html: `<div style="white-space: pre-wrap; font-family: Arial, sans-serif; line-height: 1.6;">${htmlBody}</div>`,
       });
 
       console.log(`Email sent: ${info.messageId}`);

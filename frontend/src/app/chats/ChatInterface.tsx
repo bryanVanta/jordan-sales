@@ -44,6 +44,7 @@ interface MediaItem {
 
 interface CustomerData {
   id: number;
+  firebaseLeadId?: string; // Added to track Firebase document ID for inbound/follow-up emails
   name: string;
   email: string;
   company: string;
@@ -106,14 +107,16 @@ const ChatInterface = () => {
         // Group messages by contactEmail to find leads with messages
         outreachSnapshot.docs.forEach((doc) => {
           const data = doc.data();
-          const email = data.contactEmail || data.email || '';
+          const email = data.contactEmail || '';
           
           if (email && !leadsMap.has(email)) {
+            console.log(`[Chat] Found outreach message for email: ${email}, leadId: ${data.leadId}`);
             leadsMap.set(email, {
               email: email,
-              contactEmail: data.contactEmail,
+              contactEmail: email,
               company: data.company,
               contactPerson: data.contactPerson,
+              firebaseLeadId: data.leadId, // Store the actual Firebase leadId
             });
           }
         });
@@ -124,31 +127,37 @@ const ChatInterface = () => {
         
         inboundSnapshot.docs.forEach((doc) => {
           const data = doc.data();
-          const email = data.contactEmail || data.email || '';
+          const email = data.contactEmail || '';
           
           if (email && !leadsMap.has(email)) {
+            console.log(`[Chat] Found inbound message for email: ${email}, leadId: ${data.leadId}`);
             leadsMap.set(email, {
               email: email,
-              contactEmail: data.contactEmail,
+              contactEmail: email,
               company: data.company,
               contactPerson: data.contactPerson,
+              firebaseLeadId: data.leadId, // Store the actual Firebase leadId
             });
           }
         });
         
-        const leadsWithMessages = Array.from(leadsMap.values()).map((lead, index) => ({
-          id: index + 1,
-          name: lead.contactPerson || 'Unknown',
-          email: lead.contactEmail || lead.email,
-          company: lead.company || 'Unknown Company',
-          time: 'Just now',
-          messages: [],
-          media: [],
-          progress: [],
-          temperature: 50,
-        }));
+        const leadsWithMessages = Array.from(leadsMap.values()).map((lead, index) => {
+          console.log(`[Chat] Creating lead entry for ${lead.contactEmail} with leadId: ${lead.firebaseLeadId}`);
+          return {
+            id: index + 1,
+            firebaseLeadId: lead.firebaseLeadId, // Store the actual Firebase ID
+            name: lead.contactPerson || 'Unknown',
+            email: lead.contactEmail,
+            company: lead.company || 'Unknown Company',
+            time: 'Just now',
+            messages: [],
+            media: [],
+            progress: [],
+            temperature: 50,
+          };
+        });
         
-        console.log(`[Chat] Loaded ${leadsWithMessages.length} leads with messages`);
+        console.log(`[Chat] Loaded ${leadsWithMessages.length} leads with messages`, leadsWithMessages);
         if (leadsWithMessages.length > 0) {
           setAllCustomers(leadsWithMessages);
           setSelectedCustomerId(leadsWithMessages[0].id);
@@ -213,7 +222,7 @@ const ChatInterface = () => {
     if (currentCustomer?.email) {
       loadOutreachMessages();
     }
-  }, [selectedCustomerId]);
+  }, [selectedCustomerId, currentCustomer?.email, loadedCustomerIds]);
 
   useEffect(() => {
     setShowPlusMenu(false);
@@ -249,7 +258,7 @@ const ChatInterface = () => {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          leadId: currentCustomer.id,
+          leadId: currentCustomer.firebaseLeadId || currentCustomer.id, // Use Firebase leadId
           company: currentCustomer.company,
           message: messageText,
           email: currentCustomer.email,

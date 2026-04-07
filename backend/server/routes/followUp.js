@@ -41,7 +41,7 @@ router.post('/send', async (req, res) => {
 
     // Save follow-up record to Firestore
     const followUpData = {
-      leadId: parseInt(leadId),
+      leadId: leadId,  // Keep as string - this is the Firebase document ID
       company: companyName,
       contactPerson,
       contactEmail,

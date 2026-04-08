@@ -1,55 +1,37 @@
 /**
- * Email Service (Nodemailer + Resend)
+ * Email Service (Resend)
+ * Uses Resend API for sending emails (works on localhost, Render, Vercel, etc.)
+ * No SMTP timeouts or firewall issues
  */
 
-const nodemailer = require('nodemailer');
+const resendService = require('./resendService');
 
 class EmailService {
   constructor() {
-    this.transporter = nodemailer.createTransport({
-      host: process.env.SMTP_HOST,
-      port: process.env.SMTP_PORT,
-      secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
-      auth: {
-        user: process.env.NODEMAILER_USER,
-        pass: process.env.NODEMAILER_PASS,
-      },
-    });
+    // Use Resend service instead of Nodemailer SMTP
+    this.resend = resendService;
   }
 
-  async sendEmail(to, subject, body, fromEmail = process.env.DEFAULT_FROM_EMAIL) {
+  async sendEmail(to, subject, body, fromEmail = process.env.RESEND_FROM_EMAIL) {
     try {
-      // Convert newlines to <br> tags for proper HTML rendering
-      const htmlBody = body
-        .split('\n')
-        .map(line => line || '<br>') // Preserve empty lines as breaks
-        .join('<br>');
-
-      const info = await this.transporter.sendMail({
-        from: fromEmail,
-        to,
-        subject,
-        text: body,
-        html: `<div style="white-space: pre-wrap; font-family: Arial, sans-serif; line-height: 1.6;">${htmlBody}</div>`,
-      });
-
-      console.log(`Email sent: ${info.messageId}`);
-      return { success: true, messageId: info.messageId };
+      // Delegate to Resend service
+      const result = await this.resend.sendEmail(to, subject, body, fromEmail);
+      return result;
     } catch (error) {
-      console.error('Error sending email:', error);
+      console.error('[EmailService] Error sending email:', error);
       return { success: false, error: error.message };
     }
   }
 
   async validateEmail(email) {
     // TODO: Implement email validation logic
-    console.log(`Validating: ${email}`);
+    console.log(`[EmailService] Validating: ${email}`);
     return true;
   }
 
   async getInboundEmails() {
-    // TODO: Implement Resend webhook for inbound
-    console.log('Fetching inbound emails');
+    // Resend webhook for inbound emails is handled in the webhooks route
+    console.log('[EmailService] Fetching inbound emails');
     return [];
   }
 }

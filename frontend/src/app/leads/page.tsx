@@ -12,6 +12,7 @@ export default function ProjectsPage() {
   const [outreachLoading, setOutreachLoading] = useState(false);
   const [outreachResults, setOutreachResults] = useState<any>(null);
   const [outreachError, setOutreachError] = useState('');
+  const [outreachChannel, setOutreachChannel] = useState<'email' | 'whatsapp'>('email');
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
@@ -216,6 +217,7 @@ export default function ProjectsPage() {
         body: JSON.stringify({
           leadIds: selectedProjects,
           productInfoId: 'current',
+          channel: outreachChannel,
         }),
       });
 
@@ -421,25 +423,36 @@ export default function ProjectsPage() {
               </button>
             )}
           </div>
-          <button 
-            onClick={handleOutreach}
-            disabled={outreachLoading || selectedProjects.length === 0}
-            className={`${
-              selectedProjects.length === 0 
-                ? 'bg-gray-400 opacity-50 cursor-not-allowed' 
-                : 'bg-blue-600 hover:-translate-y-1'
-            } text-white px-6 sm:px-8 py-2.5 sm:py-3 rounded-[24px] font-black text-[11px] sm:text-[12px] tracking-widest flex items-center gap-2 sm:gap-3 shadow-lg transition-all`}
-          >
-            {outreachLoading ? (
-              <>
-                <Loader size={16} className="animate-spin" /> SENDING...
-              </>
-            ) : (
-              <>
-                <Send size={16} /> SEND OUTREACH TO {selectedProjects.length > 0 ? selectedProjects.length : 0}
-              </>
-            )}
-          </button>
+          <div className="flex items-center gap-2">
+            <select
+              value={outreachChannel}
+              onChange={(e) => setOutreachChannel(e.target.value as 'email' | 'whatsapp')}
+              className="bg-white border border-gray-100 px-4 py-2.5 rounded-[18px] text-[11px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all outline-none"
+              disabled={outreachLoading}
+            >
+              <option value="email">Email</option>
+              <option value="whatsapp">WhatsApp</option>
+            </select>
+            <button 
+              onClick={handleOutreach}
+              disabled={outreachLoading || selectedProjects.length === 0}
+              className={`${
+                selectedProjects.length === 0 
+                  ? 'bg-gray-400 opacity-50 cursor-not-allowed' 
+                  : 'bg-blue-600 hover:-translate-y-1'
+              } text-white px-6 sm:px-8 py-2.5 sm:py-3 rounded-[24px] font-black text-[11px] sm:text-[12px] tracking-widest flex items-center gap-2 sm:gap-3 shadow-lg transition-all`}
+            >
+              {outreachLoading ? (
+                <>
+                  <Loader size={16} className="animate-spin" /> SENDING...
+                </>
+              ) : (
+                <>
+                  <Send size={16} /> SEND {outreachChannel.toUpperCase()} TO {selectedProjects.length > 0 ? selectedProjects.length : 0}
+                </>
+              )}
+            </button>
+          </div>
         </div>
       </div>
 

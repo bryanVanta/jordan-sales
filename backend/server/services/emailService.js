@@ -7,16 +7,13 @@ const nodemailer = require('nodemailer');
 
 class EmailService {
   constructor() {
-    const smtpPort = Number(process.env.SMTP_PORT);
-    const smtpSecure = (process.env.SMTP_SECURE || '').trim().toLowerCase() === 'true';
-
     this.transporter = nodemailer.createTransport({
       host: process.env.SMTP_HOST,
-      port: Number.isFinite(smtpPort) ? smtpPort : 465,
-      secure: smtpSecure, // true for 465, false for other ports
+      port: process.env.SMTP_PORT,
+      secure: process.env.SMTP_SECURE === 'true', // true for 465, false for other ports
       auth: {
-        user: (process.env.NODEMAILER_USER || '').trim(),
-        pass: (process.env.NODEMAILER_PASS || '').trim(),
+        user: process.env.NODEMAILER_USER,
+        pass: process.env.NODEMAILER_PASS,
       },
     });
   }

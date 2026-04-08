@@ -302,7 +302,7 @@ const triggerSentimentAnalysis = async (leadId, email) => {
 const getSentimentDistribution = async (channel = null) => {
   try {
     // If a channel is specified, first get all unique email addresses with messages in that channel
-    let emailsInChannel = new Set();
+    let contactsInChannel = new Set();
     
     if (channel) {
       // Get emails from outreach_history for this channel
@@ -312,8 +312,12 @@ const getSentimentDistribution = async (channel = null) => {
         .get();
       
       outreachSnapshot.forEach(doc => {
-        const email = doc.data().contactEmail;
-        if (email) emailsInChannel.add(email);
+        const data = doc.data() || {};
+        const contact =
+          channel === 'whatsapp'
+            ? data.contactWhatsApp || data.contactPhone || data.contactEmail
+            : data.contactEmail;
+        if (contact) contactsInChannel.add(contact);
       });
       
       // Also get emails from inbound_emails (they are always 'email' channel)
@@ -321,8 +325,18 @@ const getSentimentDistribution = async (channel = null) => {
         const inboundSnapshot = await db.collection('inbound_emails').get();
         inboundSnapshot.forEach(doc => {
           const email = doc.data().contactEmail;
-          if (email) emailsInChannel.add(email);
+          if (email) contactsInChannel.add(email);
         });
+      }
+
+      if (channel === 'whatsapp') {
+        const inboundSnapshot = await db.collection('inbound_whatsapp').get().catch(() => null);
+        if (inboundSnapshot) {
+          inboundSnapshot.forEach(doc => {
+            const wa = doc.data().contactWhatsApp;
+            if (wa) contactsInChannel.add(wa);
+          });
+        }
       }
     }
     
@@ -344,10 +358,15 @@ const getSentimentDistribution = async (channel = null) => {
         doc.data().personEmail ||
         doc.data().contact_email ||
         null;
+      const whatsapp = doc.data().whatsapp || doc.data().contactWhatsApp || null;
       
       // If filtering by channel, only count leads with messages in that channel
-      if (channel && (!email || !emailsInChannel.has(email))) {
-        return; // Skip this lead as it has no messages in the selected channel
+      if (channel) {
+        if (channel === 'whatsapp') {
+          if (!whatsapp || !contactsInChannel.has(whatsapp)) return;
+        } else {
+          if (!email || !contactsInChannel.has(email)) return;
+        }
       }
       
       // Only count leads that have a sentiment value (have been analyzed/have messages)

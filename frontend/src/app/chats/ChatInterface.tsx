@@ -23,7 +23,7 @@ import {
   Heart,
   Wind
 } from "lucide-react";
-import { fetchOutreachMessagesByLeadId, fetchOutreachMessagesByEmail, fetchCompleteConversation, formatTime } from "@/services/outreach";
+import { fetchCompleteConversationByLeadId, formatTime } from "@/services/outreach";
 import { db } from "@/lib/firebase";
 import { addDoc, collection, getDocs } from "firebase/firestore";
 
@@ -228,54 +228,81 @@ const ChatInterface = () => {
         const leadsMap = new Map<string, any>();
         
         // Group messages by contactEmail to find leads with messages (filtered by channel)
-        outreachSnapshot.docs.forEach((doc) => {
-          const data = doc.data();
-          const email = data.contactEmail || '';
-          const channel = data.channel || 'email';
-          
-          // Only include messages from the selected channel
-          if (email && channel === selectedChannel && !leadsMap.has(email)) {
-            console.log(`[Chat] Found outreach message for email: ${email}, leadId: ${data.leadId}, channel: ${channel}`);
-            leadsMap.set(email, {
-              email: email,
-              contactEmail: email,
-              company: data.company,
-              contactPerson: data.contactPerson,
-              firebaseLeadId: data.leadId, // Store the actual Firebase leadId
-              channel: channel,
+          outreachSnapshot.docs.forEach((doc) => {
+            const data: any = doc.data();
+            const channel = (data.channel || 'email') as string;
+            const contact =
+              selectedChannel === 'whatsapp'
+                ? data.contactWhatsApp || data.contactPhone || data.contactEmail || ''
+                : data.contactEmail || '';
+
+            // Only include messages from the selected channel
+            if (contact && channel === selectedChannel && !leadsMap.has(contact)) {
+              console.log(`[Chat] Found outreach message for contact: ${contact}, leadId: ${data.leadId}, channel: ${channel}`);
+              leadsMap.set(contact, {
+                email: contact, // displayed identifier (email or whatsapp)
+                contactEmail: contact,
+                company: data.company,
+                contactPerson: data.contactPerson,
+                firebaseLeadId: data.leadId, // Store the actual Firebase leadId
+                channel: channel,
+              });
+            }
+          });
+        
+          // Also check inbound messages (channel-specific)
+          if (selectedChannel === 'email') {
+            const inboundRef = collection(db, 'inbound_emails');
+            const inboundSnapshot = await getDocs(inboundRef);
+
+            inboundSnapshot.docs.forEach((doc) => {
+              const data: any = doc.data();
+              const contact = data.contactEmail || '';
+              const channel = data.channel || 'email';
+
+              if (contact && channel === selectedChannel && !leadsMap.has(contact)) {
+                console.log(`[Chat] Found inbound email for: ${contact}, leadId: ${data.leadId}, channel: ${channel}`);
+                leadsMap.set(contact, {
+                  email: contact,
+                  contactEmail: contact,
+                  company: data.company,
+                  contactPerson: data.contactPerson,
+                  firebaseLeadId: data.leadId,
+                  channel: channel,
+                });
+              }
             });
           }
-        });
-        
-        // Also check inbound messages (filter by channel)
-        const inboundRef = collection(db, 'inbound_emails');
-        const inboundSnapshot = await getDocs(inboundRef);
-        
-        inboundSnapshot.docs.forEach((doc) => {
-          const data = doc.data();
-          const email = data.contactEmail || '';
-          const channel = data.channel || 'email';
-          
-          // Only include messages from the selected channel
-          if (email && channel === selectedChannel && !leadsMap.has(email)) {
-            console.log(`[Chat] Found inbound message for email: ${email}, leadId: ${data.leadId}, channel: ${channel}`);
-            leadsMap.set(email, {
-              email: email,
-              contactEmail: email,
-              company: data.company,
-              contactPerson: data.contactPerson,
-              firebaseLeadId: data.leadId, // Store the actual Firebase leadId
-              channel: channel,
+
+          if (selectedChannel === 'whatsapp') {
+            const inboundRef = collection(db, 'inbound_whatsapp');
+            const inboundSnapshot = await getDocs(inboundRef);
+
+            inboundSnapshot.docs.forEach((doc) => {
+              const data: any = doc.data();
+              const contact = data.contactWhatsApp || '';
+              const channel = data.channel || 'whatsapp';
+
+              if (contact && channel === selectedChannel && !leadsMap.has(contact)) {
+                console.log(`[Chat] Found inbound WhatsApp for: ${contact}, leadId: ${data.leadId}, channel: ${channel}`);
+                leadsMap.set(contact, {
+                  email: contact,
+                  contactEmail: contact,
+                  company: data.company,
+                  contactPerson: data.contactPerson,
+                  firebaseLeadId: data.leadId,
+                  channel: channel,
+                });
+              }
             });
           }
-        });
         
         // Load messages for each lead and create preview
         const leadsWithMessages = await Promise.all(
           Array.from(leadsMap.values()).map(async (lead, index) => {
             try {
               // Fetch complete conversation for this lead
-              const conversationMessages = await fetchCompleteConversation(lead.contactEmail);
+        const conversationMessages = await fetchCompleteConversationByLeadId(lead.firebaseLeadId, selectedChannel);
               
               // Convert to Message format - keep timestamp for sorting
               const messagesWithTimestamp = conversationMessages
@@ -284,7 +311,9 @@ const ChatInterface = () => {
                   return {
                     id: msg.messageId || msg.id,
                     sender: (msg.status === 'received' ? 'user' : 'bot') as 'user' | 'bot',
-                    text: `[${msg.messageSubject || 'Email'}]\n\n${msg.messageContent}`,
+                    text: selectedChannel === 'whatsapp'
+                      ? `${msg.messageContent}`
+                      : `[${msg.messageSubject || 'Email'}]\n\n${msg.messageContent}`,
                     time: msg.createdAt?.toLocaleTimeString?.([], { hour: '2-digit', minute: '2-digit' })
                       ? msg.createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                       : formatTime(msg.timestamp) || 'Unknown time',
@@ -370,22 +399,29 @@ const ChatInterface = () => {
         return;
       }
 
-      console.log(`[Chat] Loading complete conversation for email: ${currentCustomer.email}`);
+      console.log(`[Chat] Loading complete conversation for lead: ${currentCustomer.firebaseLeadId}`);
       setLoadingMessages(true);
       
       try {
-        // Fetch using email address - gets both sent (outreach) and received (inbound) messages
-        const conversationMessages = await fetchCompleteConversation(currentCustomer.email);
+        if (!currentCustomer.firebaseLeadId) {
+          throw new Error('Missing lead id for conversation fetch');
+        }
+
+        // Fetch using lead id - gets both sent (outreach) and received (inbound) messages
+        const conversationMessages = await fetchCompleteConversationByLeadId(currentCustomer.firebaseLeadId, selectedChannel);
         
         if (conversationMessages && conversationMessages.length > 0) {
           // Convert messages to chat Message format
           const convertedMessages: Message[] = conversationMessages.map((msg: any) => ({
             id: msg.messageId || msg.id,
             sender: msg.status === 'received' ? "user" : "bot" as const,
-            text: `[${msg.messageSubject || 'Email'}]\n\n${msg.messageContent}`,
+            text: selectedChannel === 'whatsapp'
+              ? `${msg.messageContent}`
+              : `[${msg.messageSubject || 'Email'}]\n\n${msg.messageContent}`,
             time: msg.createdAt?.toDate?.() 
               ? msg.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
               : formatTime(msg.timestamp) || 'Unknown time',
+            timestampMs: msg.timestamp instanceof Date ? msg.timestamp.getTime() : undefined,
           }));
 
           // Set only conversation messages (replace instead of append to prevent duplicates)
@@ -444,18 +480,30 @@ const ChatInterface = () => {
     ));
     setInputValue("");
     
-    // Send email via Next.js API route (Resend / proxy-to-backend)
+    const isWhatsApp = selectedChannel === 'whatsapp';
+    const endpoint = isWhatsApp ? `${API_BASE_URL}/whatsapp/send` : `${API_BASE_URL}/follow-up/send`;
+
+    // Send message via Next.js API routes
     try {
       setSendingMessage(true);
-      const response = await fetch(`${API_BASE_URL}/follow-up/send`, {
+      const response = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          leadId: currentCustomer.firebaseLeadId || currentCustomer.id, // Use Firebase leadId
-          company: currentCustomer.company,
-          message: messageText,
-          email: currentCustomer.email,
-        }),
+        body: JSON.stringify(
+          isWhatsApp
+            ? {
+                leadId: (currentCustomer.firebaseLeadId || currentCustomer.id).toString(),
+                company: currentCustomer.company,
+                message: messageText,
+                whatsapp: currentCustomer.email, // for WhatsApp view, this holds the E.164 contact
+              }
+            : {
+                leadId: currentCustomer.firebaseLeadId || currentCustomer.id, // Use Firebase leadId
+                company: currentCustomer.company,
+                message: messageText,
+                email: currentCustomer.email,
+              }
+        ),
       });
       
       if (!response.ok) {
@@ -471,29 +519,31 @@ const ChatInterface = () => {
         const result = await response.json().catch(() => ({} as any));
         console.log('Message sent successfully', result);
 
-        // Best-effort: persist outbound message for conversation history
-        try {
-          const subject = `Follow-up: ${currentCustomer.company}`;
-          const docData: any = {
-            leadId: (currentCustomer.firebaseLeadId || currentCustomer.id).toString(),
-            company: currentCustomer.company,
-            contactPerson: currentCustomer.name || 'Contact',
-            contactEmail: currentCustomer.email,
-            channel: 'email',
-            messageSubject: subject,
-            messageContent: messageText,
-            messagePreview: messageText.substring(0, 200),
-            status: 'sent',
-            type: 'follow-up',
-            timestamp: new Date(),
-            createdAt: new Date(),
-            source: 'resend',
-          };
+        if (!isWhatsApp) {
+          // Best-effort: persist outbound email for conversation history (Resend route doesn't write to Firestore)
+          try {
+            const subject = `Follow-up: ${currentCustomer.company}`;
+            const docData: any = {
+              leadId: (currentCustomer.firebaseLeadId || currentCustomer.id).toString(),
+              company: currentCustomer.company,
+              contactPerson: currentCustomer.name || 'Contact',
+              contactEmail: currentCustomer.email,
+              channel: 'email',
+              messageSubject: subject,
+              messageContent: messageText,
+              messagePreview: messageText.substring(0, 200),
+              status: 'sent',
+              type: 'follow-up',
+              timestamp: new Date(),
+              createdAt: new Date(),
+              source: 'resend',
+            };
 
-          if (result?.messageId) docData.messageId = result.messageId;
-          await addDoc(collection(db, 'outreach_history'), docData);
-        } catch (persistError) {
-          console.warn('[Chat] Sent email but failed to persist outreach_history:', persistError);
+            if (result?.messageId) docData.messageId = result.messageId;
+            await addDoc(collection(db, 'outreach_history'), docData);
+          } catch (persistError) {
+            console.warn('[Chat] Sent email but failed to persist outreach_history:', persistError);
+          }
         }
       }
     } catch (error) {

@@ -9,6 +9,8 @@ export interface OutreachMessage {
   company: string;
   contactPerson: string;
   contactEmail: string;
+  contactWhatsApp?: string;
+  contactPhone?: string;
   channel: PlatformType;
   messageSubject?: string;
   messageContent: string;
@@ -19,6 +21,122 @@ export interface OutreachMessage {
   timestamp: Date;
   createdAt: Date;
 }
+
+/**
+ * Fetch all conversation messages (sent + received) for a specific lead id and channel
+ * Combines outreach_history + inbound_* collections.
+ */
+export const fetchCompleteConversationByLeadId = async (
+  leadId: string,
+  channel: PlatformType
+): Promise<OutreachMessage[]> => {
+  try {
+    const allMessages: OutreachMessage[] = [];
+
+    // Outbound + any inbound mirrored into outreach_history
+    try {
+      const outreachRef = collection(db, 'outreach_history');
+      const outreachQuery = query(outreachRef, where('leadId', '==', leadId));
+      const outreachSnapshot = await getDocs(outreachQuery);
+
+      outreachSnapshot.forEach((doc) => {
+        const data: any = doc.data();
+        if (data.channel && data.channel !== channel) return;
+
+        allMessages.push({
+          id: doc.id,
+          leadId: data.leadId || '',
+          company: data.company,
+          contactPerson: data.contactPerson,
+          contactEmail: data.contactEmail,
+          contactWhatsApp: data.contactWhatsApp,
+          contactPhone: data.contactPhone,
+          channel: data.channel,
+          messageSubject: data.messageSubject,
+          messageContent: data.messageContent,
+          messagePreview: data.messagePreview,
+          status: data.status,
+          errorMessage: data.errorMessage,
+          messageId: data.messageId,
+          timestamp: data.timestamp?.toDate?.() || new Date(),
+          createdAt: data.createdAt?.toDate?.() || new Date(),
+        });
+      });
+    } catch (error) {
+      console.warn('[Outreach Service] Error fetching outreach_history by leadId:', error);
+    }
+
+    // Inbound channel-specific collections (optional)
+    if (channel === 'email') {
+      try {
+        const inboundRef = collection(db, 'inbound_emails');
+        const inboundQuery = query(inboundRef, where('leadId', '==', leadId));
+        const inboundSnapshot = await getDocs(inboundQuery);
+
+        inboundSnapshot.forEach((doc) => {
+          const data: any = doc.data();
+          allMessages.push({
+            id: doc.id,
+            leadId: data.leadId || '',
+            company: data.company,
+            contactPerson: data.contactPerson,
+            contactEmail: data.contactEmail,
+            channel: 'email' as PlatformType,
+            messageSubject: `Re: ${data.subject}`,
+            messageContent: data.content,
+            messagePreview: data.content?.substring(0, 200) || '',
+            status: data.status,
+            errorMessage: data.errorMessage,
+            messageId: data.messageId,
+            timestamp: data.timestamp?.toDate?.() || new Date(),
+            createdAt: data.createdAt?.toDate?.() || new Date(),
+          });
+        });
+      } catch (error) {
+        console.warn('[Outreach Service] Error fetching inbound_emails by leadId:', error);
+      }
+    }
+
+    if (channel === 'whatsapp') {
+      try {
+        const inboundRef = collection(db, 'inbound_whatsapp');
+        const inboundQuery = query(inboundRef, where('leadId', '==', leadId));
+        const inboundSnapshot = await getDocs(inboundQuery);
+
+        inboundSnapshot.forEach((doc) => {
+          const data: any = doc.data();
+          allMessages.push({
+            id: doc.id,
+            leadId: data.leadId || '',
+            company: data.company,
+            contactPerson: data.contactPerson,
+            contactEmail: data.contactEmail || '',
+            contactWhatsApp: data.contactWhatsApp,
+            contactPhone: data.contactPhone,
+            channel: 'whatsapp' as PlatformType,
+            messageSubject: null as any,
+            messageContent: data.content,
+            messagePreview: data.content?.substring(0, 200) || '',
+            status: data.status,
+            errorMessage: data.errorMessage,
+            messageId: data.messageId,
+            timestamp: data.timestamp?.toDate?.() || new Date(),
+            createdAt: data.createdAt?.toDate?.() || new Date(),
+          });
+        });
+      } catch (error) {
+        console.warn('[Outreach Service] Error fetching inbound_whatsapp by leadId:', error);
+      }
+    }
+
+    // Sort oldest -> newest
+    allMessages.sort((a, b) => (a.timestamp?.getTime() || 0) - (b.timestamp?.getTime() || 0));
+    return allMessages;
+  } catch (error) {
+    console.error('[Outreach Service] Error fetching conversation by leadId:', error);
+    return [];
+  }
+};
 
 /**
  * Fetch outreach messages by platform

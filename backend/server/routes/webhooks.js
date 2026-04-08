@@ -78,7 +78,7 @@ router.post('/inbound-email', async (req, res) => {
 
     // Also save as a message in outreach_history for chat display
     await db.collection('outreach_history').add({
-      leadId: leadId ? parseInt(leadId) : null,
+      leadId: leadId || null,
       company: leadData?.company || 'Unknown',
       contactPerson: leadData?.contactPerson || 'Unknown',
       contactEmail: inboundEmail.sender,
@@ -113,6 +113,112 @@ router.post('/inbound-email', async (req, res) => {
       error: 'Failed to process inbound email',
       details: error.message,
     });
+  }
+});
+
+/**
+ * POST /api/webhooks/inbound-whatsapp
+ * Webhook endpoint to receive inbound WhatsApp messages (Twilio/OpenClaw-normalized)
+ *
+ * Accepts either:
+ * - Twilio webhook fields: { From, To, Body, MessageSid, ProfileName }
+ * - Normalized JSON: { from, to, body, messageId, timestamp }
+ */
+router.post('/inbound-whatsapp', async (req, res) => {
+  try {
+    const payload = req.body || {};
+
+    const body = payload.body || payload.Body || '';
+    const fromRaw = payload.from || payload.From || '';
+    const toRaw = payload.to || payload.To || '';
+    const messageId = payload.messageId || payload.MessageSid || payload.id || null;
+    const timestamp = payload.timestamp ? new Date(payload.timestamp) : new Date();
+
+    const normalizeWhatsAppNumber = (value) => {
+      const v = String(value || '').trim();
+      if (!v) return '';
+      const withoutPrefix = v.startsWith('whatsapp:') ? v.slice('whatsapp:'.length) : v;
+      if (withoutPrefix.startsWith('+')) return withoutPrefix;
+      const digits = withoutPrefix.replace(/[^\d]/g, '');
+      return digits ? `+${digits}` : '';
+    };
+
+    const from = normalizeWhatsAppNumber(fromRaw);
+    const to = normalizeWhatsAppNumber(toRaw);
+
+    if (!from || !body) {
+      return res.status(400).json({ error: 'Missing required fields: from, body' });
+    }
+
+    console.log(`[Webhook] Received inbound WhatsApp from ${from} to ${to || 'N/A'}`);
+
+    const leadsRef = db.collection('leads');
+    let leadId = null;
+    let leadData = null;
+
+    // Try whatsapp first, then phone fields
+    const fieldNamesToTry = ['whatsapp', 'phone', 'contactPhone', 'contactWhatsApp'];
+    for (const fieldName of fieldNamesToTry) {
+      if (leadId) break;
+      try {
+        const querySnapshot = await leadsRef.where(fieldName, '==', from).limit(1).get();
+        if (!querySnapshot.empty) {
+          leadId = querySnapshot.docs[0].id;
+          leadData = querySnapshot.docs[0].data();
+          console.log(`[Webhook] ✅ Found matching lead using ${fieldName}: ${leadId}`);
+          break;
+        }
+      } catch (fieldError) {
+        console.warn(`[Webhook] Field ${fieldName} search failed:`, fieldError.message);
+      }
+    }
+
+    if (!leadId) {
+      console.warn(`[Webhook] ⚠️ No lead found for WhatsApp: ${from}. Storing without lead association.`);
+    }
+
+    const inboundRecord = await db.collection('inbound_whatsapp').add({
+      leadId: leadId || null,
+      company: leadData?.company || 'Unknown',
+      contactPerson: leadData?.person || leadData?.contactPerson || 'Unknown',
+      contactWhatsApp: from,
+      channel: 'whatsapp',
+      content: String(body),
+      messageId,
+      status: 'received',
+      timestamp,
+      createdAt: new Date(),
+      source: payload.Body ? 'twilio' : 'openclaw',
+    });
+
+    // Also add to outreach_history for chat display
+    await db.collection('outreach_history').add({
+      leadId: leadId || null,
+      company: leadData?.company || 'Unknown',
+      contactPerson: leadData?.person || leadData?.contactPerson || 'Unknown',
+      contactWhatsApp: from,
+      contactPhone: leadData?.phone || null,
+      channel: 'whatsapp',
+      messageSubject: null,
+      messageContent: String(body),
+      messagePreview: String(body).substring(0, 200),
+      status: 'received',
+      messageId,
+      type: 'inbound_reply',
+      timestamp,
+      createdAt: new Date(),
+    });
+
+    if (leadId) {
+      triggerSentimentAnalysis(leadId, from)
+        .then((sentiment) => console.log(`[Webhook] Sentiment updated for lead ${leadId}: ${sentiment}`))
+        .catch((err) => console.error(`[Webhook] Error updating sentiment:`, err.message));
+    }
+
+    res.json({ success: true, recordId: inboundRecord.id });
+  } catch (error) {
+    console.error('[Webhook] Error processing inbound WhatsApp:', error);
+    res.status(500).json({ error: 'Failed to process inbound WhatsApp', details: error.message });
   }
 });
 

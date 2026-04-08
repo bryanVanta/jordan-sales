@@ -1,37 +1,59 @@
 /**
- * Email Service (Resend)
- * Uses Resend API for sending emails (works on localhost, Render, Vercel, etc.)
- * No SMTP timeouts or firewall issues
+ * Email Service (Nodemailer SMTP)
+ * Uses Nodemailer for SMTP email sending
  */
 
-const resendService = require('./resendService');
+const nodemailer = require('nodemailer');
 
 class EmailService {
   constructor() {
-    // Use Resend service instead of Nodemailer SMTP
-    this.resend = resendService;
+    const smtpPort = Number(process.env.SMTP_PORT);
+    const smtpSecure = (process.env.SMTP_SECURE || '').trim().toLowerCase() === 'true';
+
+    this.transporter = nodemailer.createTransport({
+      host: process.env.SMTP_HOST,
+      port: Number.isFinite(smtpPort) ? smtpPort : 465,
+      secure: smtpSecure, // true for 465, false for other ports
+      auth: {
+        user: (process.env.NODEMAILER_USER || '').trim(),
+        pass: (process.env.NODEMAILER_PASS || '').trim(),
+      },
+    });
   }
 
-  async sendEmail(to, subject, body, fromEmail = process.env.RESEND_FROM_EMAIL) {
+  async sendEmail(to, subject, body, fromEmail = process.env.DEFAULT_FROM_EMAIL) {
     try {
-      // Delegate to Resend service
-      const result = await this.resend.sendEmail(to, subject, body, fromEmail);
-      return result;
+      // Convert newlines to <br> tags for proper HTML rendering
+      const htmlBody = body
+        .split('\n')
+        .map(line => line || '<br>') // Preserve empty lines as breaks
+        .join('<br>');
+
+      const info = await this.transporter.sendMail({
+        from: fromEmail,
+        to,
+        subject,
+        text: body,
+        html: `<div style="white-space: pre-wrap; font-family: Arial, sans-serif; line-height: 1.6;">${htmlBody}</div>`,
+      });
+
+      console.log(`Email sent: ${info.messageId}`);
+      return { success: true, messageId: info.messageId };
     } catch (error) {
-      console.error('[EmailService] Error sending email:', error);
+      console.error('Error sending email:', error);
       return { success: false, error: error.message };
     }
   }
 
   async validateEmail(email) {
     // TODO: Implement email validation logic
-    console.log(`[EmailService] Validating: ${email}`);
+    console.log(`Validating: ${email}`);
     return true;
   }
 
   async getInboundEmails() {
-    // Resend webhook for inbound emails is handled in the webhooks route
-    console.log('[EmailService] Fetching inbound emails');
+    // TODO: Implement webhook for inbound
+    console.log('Fetching inbound emails');
     return [];
   }
 }

@@ -25,9 +25,9 @@ import {
 } from "lucide-react";
 import { fetchOutreachMessagesByLeadId, fetchOutreachMessagesByEmail, fetchCompleteConversation, formatTime } from "@/services/outreach";
 import { db } from "@/lib/firebase";
-import { collection, getDocs } from "firebase/firestore";
+import { addDoc, collection, getDocs } from "firebase/firestore";
 
-const API_BASE_URL = `${process.env.NEXT_PUBLIC_BACKEND_URL}/api`; // Use environment variable for API base URL
+const API_BASE_URL = `/api`; // Use Next.js API routes (works on Vercel)
 
 interface Message {
   id: string;
@@ -455,7 +455,7 @@ const ChatInterface = () => {
     ));
     setInputValue("");
     
-    // Send email via backend
+    // Send email via Next.js API route (Resend / proxy-to-backend)
     try {
       setSendingMessage(true);
       const response = await fetch(`${API_BASE_URL}/follow-up/send`, {
@@ -470,7 +470,8 @@ const ChatInterface = () => {
       });
       
       if (!response.ok) {
-        console.error('Failed to send message');
+        const details = await response.json().catch(() => null);
+        console.error('Failed to send message', details);
         // Remove the message if sending failed
         setAllCustomers(prev => prev.map(c =>
           c.id === selectedCustomerId
@@ -478,7 +479,33 @@ const ChatInterface = () => {
             : c
         ));
       } else {
-        console.log('Message sent successfully');
+        const result = await response.json().catch(() => ({} as any));
+        console.log('Message sent successfully', result);
+
+        // Best-effort: persist outbound message for conversation history
+        try {
+          const subject = `Follow-up: ${currentCustomer.company}`;
+          const docData: any = {
+            leadId: (currentCustomer.firebaseLeadId || currentCustomer.id).toString(),
+            company: currentCustomer.company,
+            contactPerson: currentCustomer.name || 'Contact',
+            contactEmail: currentCustomer.email,
+            channel: 'email',
+            messageSubject: subject,
+            messageContent: messageText,
+            messagePreview: messageText.substring(0, 200),
+            status: 'sent',
+            type: 'follow-up',
+            timestamp: new Date(),
+            createdAt: new Date(),
+            source: 'resend',
+          };
+
+          if (result?.messageId) docData.messageId = result.messageId;
+          await addDoc(collection(db, 'outreach_history'), docData);
+        } catch (persistError) {
+          console.warn('[Chat] Sent email but failed to persist outreach_history:', persistError);
+        }
       }
     } catch (error) {
       console.error('Error sending message:', error);

@@ -7,8 +7,9 @@ const { Resend } = require('resend');
 
 class ResendService {
   constructor() {
-    this.resend = new Resend(process.env.RESEND_API_KEY);
-    this.fromEmail = process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev';
+    this.apiKey = (process.env.RESEND_API_KEY || '').trim();
+    this.resend = new Resend(this.apiKey);
+    this.fromEmail = (process.env.RESEND_FROM_EMAIL || 'onboarding@resend.dev').trim();
   }
 
   /**
@@ -20,6 +21,10 @@ class ResendService {
    */
   async sendEmail(to, subject, body, fromEmail = this.fromEmail) {
     try {
+      if (!this.apiKey) {
+        throw new Error('Missing RESEND_API_KEY');
+      }
+
       console.log(`[Resend] Sending email to ${to}...`);
       
       // Convert newlines to HTML breaks for better rendering
@@ -29,23 +34,48 @@ class ResendService {
         .join('<br>');
 
       const response = await this.resend.emails.send({
-        from: fromEmail,
+        from: (fromEmail || '').trim(),
         to: to,
         subject: subject,
         html: `<div style="white-space: pre-wrap; font-family: Arial, sans-serif; line-height: 1.6;">${htmlBody}</div>`,
       });
 
-      const messageId = response?.data?.id || response?.id || response?.result?.id || `email-${Date.now()}`;
       console.log(`[Resend] Full response:`, JSON.stringify(response, null, 2));
+
+      if (response?.error) {
+        console.error('[Resend] API error:', response.error);
+        return {
+          success: false,
+          error: response.error.message || 'Resend API error',
+          statusCode: response.error.statusCode,
+          name: response.error.name,
+          response,
+        };
+      }
+
+      const messageId = response?.data?.id || response?.id || response?.result?.id;
+      if (!messageId) {
+        return {
+          success: false,
+          error: 'Resend did not return a message id',
+          response,
+        };
+      }
+
       console.log(`[Resend] Email sent successfully: ${messageId}`);
-      return { 
-        success: true, 
-        messageId: messageId,
-        response 
+      return {
+        success: true,
+        messageId,
+        response,
       };
     } catch (error) {
       console.error('[Resend] Error sending email:', error);
-      return { success: false, error: error.message };
+      return {
+        success: false,
+        error: error?.message || String(error),
+        statusCode: error?.statusCode,
+        name: error?.name,
+      };
     }
   }
 

@@ -1,9 +1,12 @@
 import ChatInterface from "./ChatInterface";
+import { Suspense } from "react";
 
 const Chats = () => {
   return (
     <div className="h-screen w-full overflow-hidden">
-      <ChatInterface />
+      <Suspense fallback={<div>Loading chat...</div>}>
+        <ChatInterface />
+      </Suspense>
     </div>
   );
 };

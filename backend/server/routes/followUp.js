@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
 const emailService = require('../services/emailService');
+const resendService = require('../services/resendService');
 
 /**
  * POST /api/follow-up/send
@@ -29,9 +30,23 @@ router.post('/send', async (req, res) => {
     const contactPerson = leadData.contactPerson || 'Contact';
     const companyName = company || leadData.company || 'Company';
 
-    // Send follow-up email using Nodemailer
     const subject = `Follow-up: ${companyName}`;
-    const emailResult = await emailService.sendEmail(contactEmail, subject, message);
+
+    const provider =
+      (process.env.EMAIL_PROVIDER || '').trim().toLowerCase() ||
+      (process.env.RESEND_API_KEY ? 'resend' : 'smtp');
+
+    const emailResult =
+      provider === 'resend'
+        ? await resendService.sendEmail(
+            contactEmail,
+            subject,
+            message,
+            process.env.OUTREACH_FROM_EMAIL ||
+              process.env.RESEND_FROM_EMAIL ||
+              process.env.DEFAULT_FROM_EMAIL
+          )
+        : await emailService.sendEmail(contactEmail, subject, message);
     
     if (!emailResult.success) {
       throw new Error(emailResult.error);
@@ -53,7 +68,7 @@ router.post('/send', async (req, res) => {
       type: 'follow-up',
       timestamp: new Date(),
       createdAt: new Date(),
-      source: 'resend',
+      source: provider,
     };
 
     // Only add messageId if it exists
@@ -68,6 +83,7 @@ router.post('/send', async (req, res) => {
     res.json({
       success: true,
       message: 'Follow-up email sent successfully',
+      provider,
       messageId: emailResult.messageId,
       recordId: followUpRef.id,
     });

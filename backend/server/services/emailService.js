@@ -1,5 +1,6 @@
 /**
- * Email Service (Nodemailer + Resend)
+ * Email Service (Nodemailer SMTP)
+ * Uses Nodemailer for SMTP email sending
  */
 
 const nodemailer = require('nodemailer');
@@ -48,7 +49,7 @@ class EmailService {
   }
 
   async getInboundEmails() {
-    // TODO: Implement Resend webhook for inbound
+    // TODO: Implement webhook for inbound
     console.log('Fetching inbound emails');
     return [];
   }

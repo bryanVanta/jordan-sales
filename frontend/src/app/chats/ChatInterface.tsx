@@ -89,20 +89,46 @@ const DEFAULT_MEDIA: MediaItem[] = [
  * and runs on: (1) inbound email trigger, (2) daily batch at 8am Malay time
  */
 const calculateSentiment = (messages: Message[], lastOutreachTime?: Date): 'hot' | 'warm' | 'neutral' | 'cold' => {
-  // Fallback: if no sentiment from backend yet, return neutral
-  // The backend will update this via the sentiment API
-  return 'neutral';
+  // If no messages, return neutral
+  if (!messages || messages.length === 0) return 'neutral';
 
-  // Calculate response time in minutes
+  // Find the last bot message before the user's most recent response
+  let lastBotMessageBeforeResponse: Message | undefined = undefined;
+  let lastUserMessageIndex = -1;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (messages[i].sender === 'user') {
+      lastUserMessageIndex = i;
+      break;
+    }
+  }
+  if (lastUserMessageIndex > 0) {
+    for (let i = lastUserMessageIndex - 1; i >= 0; i--) {
+      if (messages[i].sender === 'bot') {
+        lastBotMessageBeforeResponse = messages[i];
+        break;
+      }
+    }
+  }
+
+  // Calculate response time in minutes (using message order as a proxy)
   let responseTimeMinutes = 0;
-  if (lastBotMessageBeforeResponse) {
-    // This is a simplified calculation - in reality you'd parse the time strings
-    // For now, use message order as a proxy
-    responseTimeMinutes = 15; // Assuming each message is ~15 mins apart (simplified)
+  if (lastBotMessageBeforeResponse && lastUserMessageIndex > 0) {
+    // Assume each message is ~15 mins apart (simplified)
+    responseTimeMinutes = (lastUserMessageIndex - messages.indexOf(lastBotMessageBeforeResponse)) * 15;
   }
 
   // Determine sentiment based on response patterns
   const messageCount = messages.length;
+  if (messageCount >= 4 && responseTimeMinutes < 20) {
+    return 'hot';
+  }
+  if (messageCount >= 2 && responseTimeMinutes < 60) {
+    return 'warm';
+  }
+  if (messageCount >= 1 && responseTimeMinutes >= 60) {
+    return 'cold';
+  }
+  return 'neutral';
   
   // Hot: Multiple back-and-forth exchanges, quick responses
   if (messageCount >= 4 && responseTimeMinutes < 20) {

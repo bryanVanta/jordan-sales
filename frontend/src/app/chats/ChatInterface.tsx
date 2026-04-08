@@ -34,6 +34,7 @@ interface Message {
   sender: "user" | "bot";
   text: string;
   time: string;
+  timestampMs?: number; // For sentiment + accurate ordering
 }
 
 interface MediaItem {
@@ -88,65 +89,66 @@ const DEFAULT_MEDIA: MediaItem[] = [
  * Real sentiment classification is done via LLM on the backend using analyzeSentimentWithAI()
  * and runs on: (1) inbound email trigger, (2) daily batch at 8am Malay time
  */
-const calculateSentiment = (messages: Message[], lastOutreachTime?: Date): 'hot' | 'warm' | 'neutral' | 'cold' => {
-  // If no messages, return neutral
+const calculateSentiment = (messages: Message[]): 'hot' | 'warm' | 'neutral' | 'cold' => {
   if (!messages || messages.length === 0) return 'neutral';
 
-  // Find the last bot message before the user's most recent response
-  let lastBotMessageBeforeResponse: Message | undefined = undefined;
-  let lastUserMessageIndex = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].sender === 'user') {
-      lastUserMessageIndex = i;
+  const inboundMessages = messages.filter(m => m.sender === 'user');
+  const outboundMessages = messages.filter(m => m.sender === 'bot');
+  const nowMs = Date.now();
+
+  // No inbound replies: never "warm". Neutral initially, then cold after 24h.
+  if (inboundMessages.length === 0) {
+    const lastOutbound = outboundMessages.length > 0 ? outboundMessages[outboundMessages.length - 1] : undefined;
+    const lastOutboundMs = lastOutbound?.timestampMs;
+    if (!lastOutboundMs || !Number.isFinite(lastOutboundMs)) return 'neutral';
+
+    const hoursSinceLastOutbound = (nowMs - lastOutboundMs) / (1000 * 60 * 60);
+    return hoursSinceLastOutbound >= 24 ? 'cold' : 'neutral';
+  }
+
+  // Most recent inbound reply and the outbound before it
+  const lastInbound = inboundMessages[inboundMessages.length - 1];
+  const lastInboundIdx = messages.lastIndexOf(lastInbound);
+  let lastBotBeforeInbound: Message | undefined = undefined;
+  for (let i = lastInboundIdx - 1; i >= 0; i--) {
+    if (messages[i].sender === 'bot') {
+      lastBotBeforeInbound = messages[i];
       break;
     }
   }
-  if (lastUserMessageIndex > 0) {
-    for (let i = lastUserMessageIndex - 1; i >= 0; i--) {
-      if (messages[i].sender === 'bot') {
-        lastBotMessageBeforeResponse = messages[i];
-        break;
-      }
-    }
+
+  // Calculate response time in minutes (prefer timestamps; fallback to message count heuristic)
+  let responseTimeMinutes = 9999;
+  if (
+    lastBotBeforeInbound?.timestampMs &&
+    lastInbound.timestampMs &&
+    Number.isFinite(lastBotBeforeInbound.timestampMs) &&
+    Number.isFinite(lastInbound.timestampMs)
+  ) {
+    responseTimeMinutes = Math.max(
+      0,
+      (lastInbound.timestampMs - lastBotBeforeInbound.timestampMs) / (1000 * 60)
+    );
+  } else if (lastBotBeforeInbound) {
+    responseTimeMinutes = (lastInboundIdx - messages.indexOf(lastBotBeforeInbound)) * 15;
   }
 
-  // Calculate response time in minutes (using message order as a proxy)
-  let responseTimeMinutes = 0;
-  if (lastBotMessageBeforeResponse && lastUserMessageIndex > 0) {
-    // Assume each message is ~15 mins apart (simplified)
-    responseTimeMinutes = (lastUserMessageIndex - messages.indexOf(lastBotMessageBeforeResponse)) * 15;
-  }
+  const inboundCount = inboundMessages.length;
 
-  // Determine sentiment based on response patterns
-  const messageCount = messages.length;
-  if (messageCount >= 4 && responseTimeMinutes < 20) {
-    return 'hot';
-  }
-  if (messageCount >= 2 && responseTimeMinutes < 60) {
-    return 'warm';
-  }
-  if (messageCount >= 1 && responseTimeMinutes >= 60) {
-    return 'cold';
-  }
+  if (inboundCount >= 2 && responseTimeMinutes <= 60) return 'hot';
+  if (inboundCount >= 1 && responseTimeMinutes <= 24 * 60) return 'warm';
   return 'neutral';
-  
-  // Hot: Multiple back-and-forth exchanges, quick responses
-  if (messageCount >= 4 && responseTimeMinutes < 20) {
-    return 'hot';
-  }
-  
-  // Warm: Some back-and-forth, reasonable response time
-  if (messageCount >= 2 && responseTimeMinutes < 60) {
-    return 'warm';
-  }
-  
-  // Cold: Very few messages or slow responses
-  if (messageCount >= 1 && responseTimeMinutes >= 60) {
-    return 'cold';
-  }
-  
-  // Neutral: Default for single response or uncertain timing
-  return 'neutral';
+};
+
+const getSentimentCountsFromCustomers = (customers: CustomerData[]) => {
+  return customers.reduce(
+    (acc, c) => {
+      const key = c.sentiment || 'neutral';
+      if (key === 'hot' || key === 'warm' || key === 'neutral' || key === 'cold') acc[key]++;
+      return acc;
+    },
+    { hot: 0, warm: 0, neutral: 0, cold: 0 }
+  );
 };
 
 /**
@@ -162,6 +164,21 @@ const getSentimentStyle = (sentiment?: string) => {
       return { icon: Snowflake, color: 'text-blue-500', bg: 'bg-blue-50', border: 'border-blue-200' };
     default:
       return { icon: Cloud, color: 'text-gray-400', bg: 'bg-gray-50', border: 'border-gray-200' };
+  }
+};
+
+const sentimentToTemperature = (sentiment?: 'hot' | 'warm' | 'neutral' | 'cold') => {
+  switch (sentiment) {
+    case 'cold':
+      return 15;
+    case 'neutral':
+      return 45;
+    case 'warm':
+      return 70;
+    case 'hot':
+      return 90;
+    default:
+      return 45;
   }
 };
 
@@ -193,35 +210,10 @@ const ChatInterface = () => {
     console.log(`[Chat] Platform changed from Navbar: ${platformFromUrl}`);
   }, [platformFromUrl]);
 
-  // Fetch sentiment distribution from backend
+  // Keep the distribution cards in-sync with what the chat list is showing.
   useEffect(() => {
-    const fetchSentimentCounts = async () => {
-      try {
-        const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
-        const response = await fetch(`${backendUrl}/api/sentiment/distribution?channel=${selectedChannel}`);
-        if (response.ok) {
-          const data = await response.json();
-          if (data.data && typeof data.data === 'object') {
-            const { hot, warm, neutral, cold } = data.data;
-            setSentimentCounts({
-              hot: hot || 0,
-              warm: warm || 0,
-              neutral: neutral || 0,
-              cold: cold || 0
-            });
-            console.log(`[Chat] Sentiment counts updated for channel ${selectedChannel}:`, { hot, warm, neutral, cold });
-          }
-        }
-      } catch (error) {
-        console.error('[Chat] Error fetching sentiment distribution:', error);
-      }
-    };
-
-    fetchSentimentCounts();
-    // Refresh every 30 seconds
-    const interval = setInterval(fetchSentimentCounts, 30000);
-    return () => clearInterval(interval);
-  }, [selectedChannel]);
+    setSentimentCounts(getSentimentCountsFromCustomers(allCustomers));
+  }, [allCustomers, selectedChannel]);
 
   // Load all leads from Firebase when component mounts or channel changes
   useEffect(() => {
@@ -303,48 +295,45 @@ const ChatInterface = () => {
               // Sort by timestamp ascending (oldest first)
               const messagesList: Message[] = messagesWithTimestamp
                 .sort((a, b) => a.sortTime - b.sortTime)
-                .map(({ sortTime, ...msg }) => msg as Message);
+                .map(({ sortTime, ...msg }) => ({ ...msg, timestampMs: sortTime }) as Message);
               
               // Get most recent message time for display
               const mostRecentTime = messagesList.length > 0 ? messagesList[messagesList.length - 1].time : 'Just now';
               
-              // Find the last message we sent (outreach)
-              const lastOutreachMsg = [...messagesList].reverse().find(m => m.sender === 'bot');
-              
               // Calculate sentiment
-              const sentiment: 'hot' | 'warm' | 'neutral' | 'cold' = calculateSentiment(messagesList, lastOutreachMsg ? new Date() : undefined);
+              const sentiment: 'hot' | 'warm' | 'neutral' | 'cold' = calculateSentiment(messagesList);
               
               console.log(`[Chat] Creating lead entry for ${lead.contactEmail} with ${messagesList.length} messages, sentiment: ${sentiment}`);
               return {
-                id: index + 1,
-                firebaseLeadId: lead.firebaseLeadId, // Store the actual Firebase ID
-                name: lead.contactPerson || 'Unknown',
-                email: lead.contactEmail,
-                company: lead.company || 'Unknown Company',
-                time: mostRecentTime,
-                messages: messagesList,
-                media: [],
-                progress: [],
-                temperature: 50,
-                sentiment: sentiment, // Add calculated sentiment
-                channel: lead.channel, // Store the channel
-              };
+                 id: index + 1,
+                 firebaseLeadId: lead.firebaseLeadId, // Store the actual Firebase ID
+                 name: lead.contactPerson || 'Unknown',
+                 email: lead.contactEmail,
+                 company: lead.company || 'Unknown Company',
+                 time: mostRecentTime,
+                 messages: messagesList,
+                 media: [],
+                 progress: [],
+                 temperature: sentimentToTemperature(sentiment),
+                 sentiment: sentiment, // Add calculated sentiment
+                 channel: lead.channel, // Store the channel
+               };
             } catch (error) {
               console.error(`[Chat] Error loading messages for ${lead.contactEmail}:`, error);
-              return {
-                id: index + 1,
-                firebaseLeadId: lead.firebaseLeadId,
-                name: lead.contactPerson || 'Unknown',
-                email: lead.contactEmail,
-                company: lead.company || 'Unknown Company',
-                time: 'Just now',
-                messages: [],
-                media: [],
-                progress: [],
-                temperature: 50,
-                sentiment: 'neutral' as const, // Default to neutral on error
-                channel: lead.channel,
-              };
+               return {
+                 id: index + 1,
+                 firebaseLeadId: lead.firebaseLeadId,
+                 name: lead.contactPerson || 'Unknown',
+                 email: lead.contactEmail,
+                 company: lead.company || 'Unknown Company',
+                 time: 'Just now',
+                 messages: [],
+                 media: [],
+                 progress: [],
+                 temperature: sentimentToTemperature('neutral'),
+                 sentiment: 'neutral' as const, // Default to neutral on error
+                 channel: lead.channel,
+               };
             }
           })
         );

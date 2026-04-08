@@ -164,8 +164,18 @@ const analyzeSingleLead = async (leadId) => {
       return new Date(aTime).getTime() - new Date(bTime).getTime();
     });
 
-    // Analyze sentiment using AI
-    const sentiment = await analyzeSentimentWithAI(allMessages);
+    // If there's no inbound (customer) reply yet, don't ask the LLM to guess "warm/hot"
+    // based only on our outbound messages. Use a simple time-based heuristic.
+    let sentiment;
+    if (inboundSnapshot.empty) {
+      const lastMsg = allMessages[allMessages.length - 1];
+      const lastTime = (lastMsg.createdAt || lastMsg.timestamp)?.toDate?.() || new Date(lastMsg.createdAt || lastMsg.timestamp);
+      const hoursSinceLastOutbound = (Date.now() - new Date(lastTime).getTime()) / (1000 * 60 * 60);
+      sentiment = hoursSinceLastOutbound >= 24 ? 'cold' : 'neutral';
+    } else {
+      // Analyze sentiment using AI
+      sentiment = await analyzeSentimentWithAI(allMessages);
+    }
 
     // Update lead with sentiment
     await db.collection('leads').doc(leadId).update({
@@ -328,10 +338,15 @@ const getSentimentDistribution = async (channel = null) => {
 
     leadsSnapshot.forEach(doc => {
       const sentiment = doc.data().sentiment;
-      const email = doc.data().email; // Assuming leads have email field
+      const email =
+        doc.data().contactEmail ||
+        doc.data().email ||
+        doc.data().personEmail ||
+        doc.data().contact_email ||
+        null;
       
       // If filtering by channel, only count leads with messages in that channel
-      if (channel && !emailsInChannel.has(email)) {
+      if (channel && (!email || !emailsInChannel.has(email))) {
         return; // Skip this lead as it has no messages in the selected channel
       }
       

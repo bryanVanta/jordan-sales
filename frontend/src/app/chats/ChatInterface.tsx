@@ -887,8 +887,8 @@ const ChatInterface = () => {
                       <Navigation size={12} className="text-blue-600 rotate-180 fill-blue-600" />
                     </div>
                     <div className="h-3 w-full bg-gray-100 rounded-full flex overflow-hidden p-0.5 gap-0.5 shadow-inner">
-                      <div className="h-full w-1/4 bg-gray-300 rounded-full cursor-pointer transition-all hover:brightness-110" title="Cold" />
-                      <div className="h-full w-1/4 bg-blue-500 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.4)] cursor-pointer transition-all hover:brightness-110" title="Neutral" />
+                      <div className="h-full w-1/4 bg-blue-500 rounded-full shadow-[0_0_8px_rgba(59,130,246,0.4)] cursor-pointer transition-all hover:brightness-110" title="Cold" />
+                      <div className="h-full w-1/4 bg-gray-300 rounded-full cursor-pointer transition-all hover:brightness-110" title="Neutral" />
                       <div className="h-full w-1/4 bg-orange-400 rounded-full cursor-pointer transition-all hover:brightness-110" title="Warm" />
                       <div className="h-full w-1/4 bg-red-500 rounded-full cursor-pointer transition-all hover:brightness-110" title="Hot" />
                     </div>

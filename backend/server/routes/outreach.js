@@ -13,6 +13,7 @@ const router = express.Router();
  * POST /outreach/send
  * Send personalized outreach messages to selected leads
  * Body: { leadIds: [string], productInfoId?: string, channel?: 'email'|'whatsapp' }
+ * Default behavior (no channel override): WhatsApp if lead has `whatsapp`, otherwise Email.
  */
 router.post('/send', async (req, res) => {
   try {

@@ -11,7 +11,7 @@ const { generateSystemPrompt, callOpenRouter } = require('./llmService');
 
 /**
  * Select the best communication channel based on available contact info
- * Priority: WhatsApp > Email > Phone
+ * Priority: WhatsApp > Email
  */
 function selectBestChannel(lead) {
   if (lead.whatsapp) {
@@ -26,13 +26,6 @@ function selectBestChannel(lead) {
       channel: 'email',
       contact: lead.email,
       displayName: 'Email',
-    };
-  }
-  if (lead.phone) {
-    return {
-      channel: 'phone',
-      contact: lead.phone,
-      displayName: 'Phone/SMS',
     };
   }
   return null;
@@ -247,7 +240,7 @@ async function executeBulkOutreach(leadIds, productInfoId = 'current', options =
 
         if (channelOverride) {
           if (channelOverride === 'whatsapp') {
-            const whatsappTarget = lead.whatsapp || lead.phone || '';
+            const whatsappTarget = lead.whatsapp || '';
             if (whatsappTarget) {
               channelInfo = {
                 channel: 'whatsapp',

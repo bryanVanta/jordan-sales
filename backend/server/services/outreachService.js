@@ -7,6 +7,7 @@ const { db } = require('../config/firebase');
 const emailService = require('./emailService');
 const whatsappService = require('./whatsappService');
 const { generateMessageWithOpenClaw } = require('./openClawService');
+const { generateSystemPrompt, callOpenRouter } = require('./llmService');
 
 /**
  * Select the best communication channel based on available contact info
@@ -37,10 +38,43 @@ function selectBestChannel(lead) {
   return null;
 }
 
+async function generateWhatsAppOutreachWithAI(lead, productInfoId = null) {
+  const systemPrompt = await generateSystemPrompt(productInfoId);
+
+  const companyName = lead.company || 'your company';
+  const location = lead.location || '';
+
+  const prompt = `Write ONE WhatsApp message to a potential customer.
+
+Rules:
+- 2 to 4 short sentences max
+- No email formatting (no "Dear", no subject lines)
+- Friendly, human, Malaysian tone (professional)
+- Start with a greeting to the COMPANY (not a person). Example: "Hi ${companyName} team," or "Hi ${companyName},"
+- Introduce us as "VantaTech" in the first sentence.
+- Avoid opening with the word "demo" and avoid proposing a "demo" as the first CTA. Prefer a quick chat/call instead.
+- Include a clear next step question (e.g. "Open to a quick 10-min chat this week?")
+- If you mention the company name, use: ${companyName}
+- If location helps, it is: ${location}
+
+Return ONLY the message text.`;
+
+  const response = await callOpenRouter(
+    [
+      { role: 'user', content: systemPrompt || 'You are a helpful sales assistant.' },
+      { role: 'assistant', content: 'Understood.' },
+      { role: 'user', content: prompt },
+    ],
+    false
+  );
+
+  return String(response?.content || '').trim();
+}
+
 /**
  * Generate a professional, personalized outreach message using templates
  */
-async function generateOutreachMessage(lead, productInfo, channel) {
+async function generateOutreachMessage(lead, productInfo, channel, productInfoId = null) {
   try {
     // Add debugging logs to verify the lead object structure
     console.log('[Outreach] Lead object:', lead);
@@ -56,19 +90,19 @@ async function generateOutreachMessage(lead, productInfo, channel) {
     // Add debugging logs to verify the companyDetails object
     console.log('[Outreach] companyDetails object:', companyDetails);
 
-    const generatedMessage = await generateMessageWithOpenClaw(productInfo, companyDetails);
-
-    console.log('[Outreach] Generated message type:', typeof generatedMessage);
-    console.log('[Outreach] Generated message preview:', String(generatedMessage).slice(0, 100));
-
     if (channel === 'email') {
+      const generatedMessage = await generateMessageWithOpenClaw(productInfo, companyDetails);
+
+      console.log('[Outreach] Generated message type:', typeof generatedMessage);
+      console.log('[Outreach] Generated message preview:', String(generatedMessage).slice(0, 100));
       return {
         subject: `Exciting Opportunity for ${companyDetails.companyName}`,
         body: String(generatedMessage), // Ensure it's a string
       };
     } else if (channel === 'whatsapp') {
+      const whatsappText = await generateWhatsAppOutreachWithAI(lead, productInfoId);
       return {
-        body: String(generatedMessage), // Ensure it's a string
+        body: whatsappText,
       };
     } else if (channel === 'phone') {
       return {
@@ -109,6 +143,16 @@ async function sendOutreachMessage(lead, messageContent, channelInfo) {
       result = { success: true, messageId: `sms-${lead.id}` };
     }
 
+    if (!result?.success) {
+      const detailBits = [];
+      if (result?.error) detailBits.push(result.error);
+      if (result?.details) detailBits.push(result.details);
+      console.warn(
+        `[Outreach] ${displayName} send failed for ${lead.company}:`,
+        detailBits.length > 0 ? detailBits.join(' | ') : result
+      );
+    }
+
     return result;
   } catch (error) {
     console.error(`[Outreach] Error sending message to ${lead.company}:`, error.message);
@@ -126,15 +170,18 @@ async function saveOutreachRecord(lead, channel, messageContent, result) {
 
     const record = {
       leadId: lead.id,
-      company: lead.company,
-      contactPerson: lead.person,
-      contactEmail: lead.email,
+      company: lead.company || 'Unknown Company',
+      contactPerson: lead.person || null,
+      contactEmail: lead.email || null,
+      contactPhone: lead.phone || null,
+      contactWhatsApp: lead.whatsapp || null,
       channel: channel,
       messageSubject: messageContent.subject || null, // For email channel
       messageContent: fullMessage, // Store ENTIRE message with newlines preserved
       messagePreview: messagePreview,
       status: result.success ? 'sent' : 'failed',
       errorMessage: result.error || null,
+      errorDetails: result.details || null,
       messageId: result.messageId || null,
       timestamp: new Date(),
       createdAt: new Date(),
@@ -161,9 +208,10 @@ async function saveOutreachRecord(lead, channel, messageContent, result) {
 /**
  * Execute bulk outreach to multiple leads
  */
-async function executeBulkOutreach(leadIds, productInfoId = 'current') {
+async function executeBulkOutreach(leadIds, productInfoId = 'current', options = {}) {
   try {
     console.log(`[Outreach] Starting bulk outreach for ${leadIds.length} leads...`);
+    const channelOverride = (options.channel || '').trim().toLowerCase() || null;
 
     const results = {
       total: leadIds.length,
@@ -194,8 +242,27 @@ async function executeBulkOutreach(leadIds, productInfoId = 'current') {
 
         const lead = { id: leadDoc.id, ...leadDoc.data() };
 
-        // Select best channel
-        const channelInfo = selectBestChannel(lead);
+        // Select channel (allow explicit override from API)
+        let channelInfo = null;
+
+        if (channelOverride) {
+          if (channelOverride === 'whatsapp') {
+            const whatsappTarget = lead.whatsapp || lead.phone || '';
+            if (whatsappTarget) {
+              channelInfo = {
+                channel: 'whatsapp',
+                contact: whatsappTarget,
+                displayName: 'WhatsApp',
+              };
+            }
+          } else if (channelOverride === 'email') {
+            if (lead.email) {
+              channelInfo = { channel: 'email', contact: lead.email, displayName: 'Email' };
+            }
+          }
+        }
+
+        if (!channelInfo) channelInfo = selectBestChannel(lead);
         if (!channelInfo) {
           console.warn(`[Outreach] No contact info for ${lead.company}`);
           results.failed++;
@@ -209,7 +276,7 @@ async function executeBulkOutreach(leadIds, productInfoId = 'current') {
         }
 
         // Generate personalized message
-        const messageContent = await generateOutreachMessage(lead, productInfo, channelInfo.channel);
+        const messageContent = await generateOutreachMessage(lead, productInfo, channelInfo.channel, productInfoId);
         if (!messageContent) {
           results.failed++;
           results.details.push({
@@ -244,6 +311,7 @@ async function executeBulkOutreach(leadIds, productInfoId = 'current') {
             channel: channelInfo.displayName,
             status: 'failed',
             reason: sendResult.error,
+            details: sendResult.details || null,
           });
         }
 

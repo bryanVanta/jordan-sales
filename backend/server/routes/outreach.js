@@ -12,11 +12,11 @@ const router = express.Router();
 /**
  * POST /outreach/send
  * Send personalized outreach messages to selected leads
- * Body: { leadIds: [string], productInfoId?: string }
+ * Body: { leadIds: [string], productInfoId?: string, channel?: 'email'|'whatsapp' }
  */
 router.post('/send', async (req, res) => {
   try {
-    const { leadIds, productInfoId } = req.body;
+    const { leadIds, productInfoId, channel } = req.body;
 
     if (!leadIds || !Array.isArray(leadIds) || leadIds.length === 0) {
       return res.status(400).json({
@@ -28,7 +28,7 @@ router.post('/send', async (req, res) => {
     console.log(`[API] Receiving outreach request for ${leadIds.length} leads`);
 
     // Execute bulk outreach
-    const results = await executeBulkOutreach(leadIds, productInfoId);
+    const results = await executeBulkOutreach(leadIds, productInfoId, { channel });
 
     res.json({
       success: true,

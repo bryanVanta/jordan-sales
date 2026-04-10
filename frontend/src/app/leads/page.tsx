@@ -12,7 +12,6 @@ export default function ProjectsPage() {
   const [outreachLoading, setOutreachLoading] = useState(false);
   const [outreachResults, setOutreachResults] = useState<any>(null);
   const [outreachError, setOutreachError] = useState('');
-  const [outreachChannel, setOutreachChannel] = useState<'email' | 'whatsapp'>('email');
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
@@ -217,7 +216,6 @@ export default function ProjectsPage() {
         body: JSON.stringify({
           leadIds: selectedProjects,
           productInfoId: 'current',
-          channel: outreachChannel,
         }),
       });
 
@@ -424,15 +422,9 @@ export default function ProjectsPage() {
             )}
           </div>
           <div className="flex items-center gap-2">
-            <select
-              value={outreachChannel}
-              onChange={(e) => setOutreachChannel(e.target.value as 'email' | 'whatsapp')}
-              className="bg-white border border-gray-100 px-4 py-2.5 rounded-[18px] text-[11px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all outline-none"
-              disabled={outreachLoading}
-            >
-              <option value="email">Email</option>
-              <option value="whatsapp">WhatsApp</option>
-            </select>
+            <div className="hidden sm:flex items-center px-4 py-2.5 rounded-[18px] bg-white border border-gray-100 shadow-xl text-[10px] font-black text-gray-500 uppercase tracking-widest">
+              Auto: WhatsApp &gt; Email
+            </div>
             <button 
               onClick={handleOutreach}
               disabled={outreachLoading || selectedProjects.length === 0}
@@ -448,7 +440,7 @@ export default function ProjectsPage() {
                 </>
               ) : (
                 <>
-                  <Send size={16} /> SEND {outreachChannel.toUpperCase()} TO {selectedProjects.length > 0 ? selectedProjects.length : 0}
+                  <Send size={16} /> SEND OUTREACH TO {selectedProjects.length > 0 ? selectedProjects.length : 0}
                 </>
               )}
             </button>

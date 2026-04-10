@@ -126,7 +126,24 @@ router.post('/inbound-email', async (req, res) => {
  */
 router.post('/inbound-whatsapp', async (req, res) => {
   try {
+    const expectedToken = (process.env.INBOUND_WHATSAPP_WEBHOOK_TOKEN || '').trim();
+    // Treat placeholder as "disabled" so local/dev setups don't accidentally 401.
+    const tokenEnabled = expectedToken && expectedToken.toLowerCase() !== 'change-me';
+    if (tokenEnabled) {
+      const authHeader = String(req.headers.authorization || '').trim();
+      const bearer = authHeader.toLowerCase().startsWith('bearer ') ? authHeader.slice(7).trim() : '';
+      if (!bearer || bearer !== expectedToken) {
+        console.warn('[Webhook] Inbound WhatsApp unauthorized request');
+        return res.status(401).json({ error: 'Unauthorized' });
+      }
+    }
+
     const payload = req.body || {};
+    console.log('[Webhook] Inbound WhatsApp webhook hit:', {
+      keys: Object.keys(payload),
+      hasFrom: Boolean(payload.from || payload.From),
+      hasBody: Boolean(payload.body || payload.Body),
+    });
 
     const body = payload.body || payload.Body || '';
     const fromRaw = payload.from || payload.From || '';
@@ -152,16 +169,59 @@ router.post('/inbound-whatsapp', async (req, res) => {
 
     console.log(`[Webhook] Received inbound WhatsApp from ${from} to ${to || 'N/A'}`);
 
+    // OpenClaw can emit multiple lifecycle events for the same inbound message.
+    // Treat dedupe as best-effort so lookup issues never block storing the inbound.
+    const inboundRef = db.collection('inbound_whatsapp');
+    try {
+      if (messageId) {
+        const existingByMessageId = await inboundRef.where('messageId', '==', messageId).limit(1).get();
+        if (!existingByMessageId.empty) {
+          console.log(`[Webhook] Duplicate inbound WhatsApp ignored via messageId: ${messageId}`);
+          return res.json({ success: true, duplicate: true, recordId: existingByMessageId.docs[0].id });
+        }
+      } else {
+        const recentSnapshot = await inboundRef.where('contactWhatsApp', '==', from).limit(10).get();
+
+        const incomingBody = String(body).trim();
+        const duplicateRecent = recentSnapshot.docs.find((doc) => {
+          const data = doc.data();
+          const existingBody = String(data.content || '').trim();
+          const createdAt = data.createdAt?.toDate?.();
+          const ageMs = createdAt instanceof Date ? Math.abs(Date.now() - createdAt.getTime()) : Number.POSITIVE_INFINITY;
+          return existingBody === incomingBody && ageMs <= 2 * 60 * 1000;
+        });
+
+        if (duplicateRecent) {
+          console.log(`[Webhook] Duplicate inbound WhatsApp ignored via recent match: ${duplicateRecent.id}`);
+          return res.json({ success: true, duplicate: true, recordId: duplicateRecent.id });
+        }
+      }
+    } catch (dedupeError) {
+      console.warn('[Webhook] Inbound WhatsApp dedupe check failed, continuing with save:', dedupeError.message);
+    }
+
     const leadsRef = db.collection('leads');
     let leadId = null;
     let leadData = null;
 
     // Try whatsapp first, then phone fields
     const fieldNamesToTry = ['whatsapp', 'phone', 'contactPhone', 'contactWhatsApp'];
+    const fromDigits = from.replace(/[^\d]/g, '');
+    const candidateValues = Array.from(
+      new Set(
+        [
+          from,
+          `whatsapp:${from}`,
+          fromDigits ? `+${fromDigits}` : null,
+          fromDigits || null,
+        ].filter(Boolean)
+      )
+    ).slice(0, 10);
+
     for (const fieldName of fieldNamesToTry) {
       if (leadId) break;
       try {
-        const querySnapshot = await leadsRef.where(fieldName, '==', from).limit(1).get();
+        const querySnapshot = await leadsRef.where(fieldName, 'in', candidateValues).limit(1).get();
         if (!querySnapshot.empty) {
           leadId = querySnapshot.docs[0].id;
           leadData = querySnapshot.docs[0].data();
@@ -177,7 +237,7 @@ router.post('/inbound-whatsapp', async (req, res) => {
       console.warn(`[Webhook] ⚠️ No lead found for WhatsApp: ${from}. Storing without lead association.`);
     }
 
-    const inboundRecord = await db.collection('inbound_whatsapp').add({
+    const inboundRecord = await inboundRef.add({
       leadId: leadId || null,
       company: leadData?.company || 'Unknown',
       contactPerson: leadData?.person || leadData?.contactPerson || 'Unknown',
@@ -190,6 +250,8 @@ router.post('/inbound-whatsapp', async (req, res) => {
       createdAt: new Date(),
       source: payload.Body ? 'twilio' : 'openclaw',
     });
+
+    console.log(`[Webhook] Inbound WhatsApp saved: ${inboundRecord.id} (leadId=${leadId || 'none'})`);
 
     // Also add to outreach_history for chat display
     await db.collection('outreach_history').add({
@@ -219,6 +281,27 @@ router.post('/inbound-whatsapp', async (req, res) => {
   } catch (error) {
     console.error('[Webhook] Error processing inbound WhatsApp:', error);
     res.status(500).json({ error: 'Failed to process inbound WhatsApp', details: error.message });
+  }
+});
+
+/**
+ * GET /api/webhooks/debug/inbound-whatsapp
+ * Debug endpoint to view inbound WhatsApp records stored
+ */
+router.get('/debug/inbound-whatsapp', async (req, res) => {
+  try {
+    const inboundRef = db.collection('inbound_whatsapp');
+    const snapshot = await inboundRef.orderBy('createdAt', 'desc').limit(50).get();
+
+    const messages = [];
+    snapshot.forEach((doc) => {
+      messages.push({ id: doc.id, ...doc.data() });
+    });
+
+    res.json({ success: true, count: messages.length, messages });
+  } catch (error) {
+    console.error('[Debug] Error fetching inbound WhatsApp:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 

@@ -15,12 +15,37 @@ export interface OutreachMessage {
   messageSubject?: string;
   messageContent: string;
   messagePreview: string;
-  status: 'sent' | 'failed';
+  status: 'sent' | 'failed' | 'received';
   errorMessage?: string;
   messageId?: string;
   timestamp: Date;
   createdAt: Date;
 }
+
+const getMessageTimestamp = (message: OutreachMessage) =>
+  message.timestamp?.getTime?.() || message.createdAt?.getTime?.() || 0;
+
+const dedupeConversationMessages = (messages: OutreachMessage[]): OutreachMessage[] => {
+  const seen = new Set<string>();
+
+  return messages.filter((message) => {
+    const timestampMs = getMessageTimestamp(message);
+    const key =
+      message.messageId ||
+      [
+        message.leadId || '',
+        message.channel || '',
+        message.status || '',
+        message.contactWhatsApp || message.contactEmail || '',
+        message.messageContent || '',
+        timestampMs,
+      ].join('::');
+
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
 
 /**
  * Fetch all conversation messages (sent + received) for a specific lead id and channel
@@ -129,9 +154,9 @@ export const fetchCompleteConversationByLeadId = async (
       }
     }
 
-    // Sort oldest -> newest
-    allMessages.sort((a, b) => (a.timestamp?.getTime() || 0) - (b.timestamp?.getTime() || 0));
-    return allMessages;
+    const dedupedMessages = dedupeConversationMessages(allMessages);
+    dedupedMessages.sort((a, b) => getMessageTimestamp(a) - getMessageTimestamp(b));
+    return dedupedMessages;
   } catch (error) {
     console.error('[Outreach Service] Error fetching conversation by leadId:', error);
     return [];

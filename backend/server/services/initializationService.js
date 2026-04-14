@@ -4,7 +4,7 @@
  * and maintains an in-memory cache for quick access.
  */
 
-const { getCurrentProductInfo } = require('./productInfoService');
+const { getProductInfo, CURRENT_DOC_ID } = require('./productInfoService');
 
 let productInfoCache = null;
 let isInitialized = false;
@@ -27,7 +27,7 @@ async function initializeSystem() {
   initializationPromise = (async () => {
     try {
       console.log('📚 Loading product & services information from Firebase...');
-      productInfoCache = await getCurrentProductInfo();
+      productInfoCache = await getProductInfo(CURRENT_DOC_ID);
 
       if (productInfoCache) {
         console.log(`✅ Product info loaded: "${productInfoCache.productName || 'Unnamed Product'}"`);
@@ -61,7 +61,7 @@ function getProductInfoCache() {
 async function refreshProductInfo() {
   try {
     console.log('🔄 Refreshing product & services information from Firebase...');
-    productInfoCache = await getCurrentProductInfo();
+    productInfoCache = await getProductInfo(CURRENT_DOC_ID);
     console.log('✅ Product info refreshed');
     return productInfoCache;
   } catch (error) {

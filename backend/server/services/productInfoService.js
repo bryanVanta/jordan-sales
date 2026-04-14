@@ -171,7 +171,7 @@ async function extractDocumentText({ fileName = '', mimeType = '', contentBase64
   }
 }
 
-async function saveTrainingAsset(assetKey, assetData) {
+async function saveTrainingAssetForProductInfo(productInfoId, assetKey, assetData) {
   const validKeys = TRAINING_ASSET_KEYS;
   if (!validKeys.includes(assetKey)) {
     throw new Error('Invalid training asset key');
@@ -185,7 +185,8 @@ async function saveTrainingAsset(assetKey, assetData) {
     extractedText = '';
   }
 
-  const docRef = db.collection(COLLECTION_NAME).doc(CURRENT_DOC_ID);
+  const resolvedId = productInfoId || CURRENT_DOC_ID;
+  const docRef = db.collection(COLLECTION_NAME).doc(resolvedId);
   const existingDoc = await docRef.get();
   const existingData = existingDoc.exists ? existingDoc.data() : {};
   const normalizedTrainingAssets = normalizePayload(existingData).trainingAssets;
@@ -201,7 +202,7 @@ async function saveTrainingAsset(assetKey, assetData) {
     {
       ...normalizePayload(existingData),
       trainingAssets: normalizedTrainingAssets,
-      id: CURRENT_DOC_ID,
+      id: resolvedId,
       createdAt: existingDoc.exists ? existingData.createdAt || new Date() : new Date(),
       updatedAt: new Date(),
     },
@@ -211,8 +212,9 @@ async function saveTrainingAsset(assetKey, assetData) {
   return normalizedTrainingAssets[assetKey];
 }
 
-async function saveCurrentProductInfo(data) {
-  const docRef = db.collection(COLLECTION_NAME).doc(CURRENT_DOC_ID);
+async function saveProductInfo(productInfoId, data) {
+  const resolvedId = productInfoId || CURRENT_DOC_ID;
+  const docRef = db.collection(COLLECTION_NAME).doc(resolvedId);
   const existingDoc = await docRef.get();
   const existingData = existingDoc.exists ? existingDoc.data() : {};
 
@@ -249,7 +251,7 @@ async function saveCurrentProductInfo(data) {
     ...existingData, // Start with existing data
     ...updateData, // Apply only specified updates
     trainingAssets: mergedTrainingAssets,
-    id: CURRENT_DOC_ID,
+    id: resolvedId,
     createdAt: existingDoc.exists ? existingData.createdAt || new Date() : new Date(),
     updatedAt: new Date(),
   };
@@ -258,15 +260,16 @@ async function saveCurrentProductInfo(data) {
   return savedData;
 }
 
-async function getCurrentProductInfo() {
-  const doc = await db.collection(COLLECTION_NAME).doc(CURRENT_DOC_ID).get();
+async function getProductInfo(productInfoId) {
+  const resolvedId = productInfoId || CURRENT_DOC_ID;
+  const doc = await db.collection(COLLECTION_NAME).doc(resolvedId).get();
   return doc.exists ? { id: doc.id, ...doc.data() } : null;
 }
 
 module.exports = {
-  saveCurrentProductInfo,
-  getCurrentProductInfo,
-  saveTrainingAsset,
+  saveProductInfo,
+  getProductInfo,
+  saveTrainingAssetForProductInfo,
   extractDocumentText,
   normalizePayload,
   COLLECTION_NAME,

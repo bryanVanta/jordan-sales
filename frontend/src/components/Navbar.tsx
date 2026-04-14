@@ -4,16 +4,22 @@ import { ChevronDown, ChevronRight, Plus, User } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
+const SELECTED_PROJECT_STORAGE_KEY = 'jordan:selectedProjectId';
+const PROJECT_CHANGED_EVENT = 'jordan:projectChanged';
+
 const NavbarContent = () => {
   const [showProfilePopup, setShowProfilePopup] = useState(false);
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectsError, setProjectsError] = useState('');
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('current');
+  const [selectedProjectName, setSelectedProjectName] = useState<string>('Jordan Projects');
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const router = useRouter();
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
   const API_BASE_URL = `${BACKEND_URL}/api`;
+  const productInfoIdFromUrl = searchParams.get('productInfoId');
 
   const getPageTitle = () => {
     if (pathname === '/') return 'Dashboard';
@@ -76,6 +82,50 @@ const NavbarContent = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const setSelectedProject = (id: string) => {
+    setSelectedProjectId(id);
+    try {
+      window.localStorage.setItem(SELECTED_PROJECT_STORAGE_KEY, id);
+    } catch {}
+
+    try {
+      window.dispatchEvent(new CustomEvent(PROJECT_CHANGED_EVENT, { detail: { id } }));
+    } catch {}
+  };
+
+  useEffect(() => {
+    if (productInfoIdFromUrl) {
+      setSelectedProject(productInfoIdFromUrl);
+      return;
+    }
+
+    try {
+      const stored = window.localStorage.getItem(SELECTED_PROJECT_STORAGE_KEY);
+      if (stored) setSelectedProjectId(stored);
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productInfoIdFromUrl]);
+
+  useEffect(() => {
+    if (selectedProjectId === 'new') {
+      setSelectedProjectName('New Project');
+      return;
+    }
+
+    const match = projects.find((proj) => proj.id === selectedProjectId);
+    if (match) {
+      setSelectedProjectName(match.name);
+      return;
+    }
+
+    if (selectedProjectId === 'current') {
+      setSelectedProjectName('Current Project');
+      return;
+    }
+
+    setSelectedProjectName('Selected Project');
+  }, [projects, selectedProjectId]);
+
   useEffect(() => {
     if (showProfilePopup) {
       loadProjects();
@@ -85,11 +135,20 @@ const NavbarContent = () => {
 
   const handleSelectProject = (id: string) => {
     setShowProfilePopup(false);
+    setSelectedProject(id);
+
+    if (pathname.startsWith('/leads')) {
+      router.push(`/leads?productInfoId=${encodeURIComponent(id)}`);
+      return;
+    }
+
     router.push(`/training?productInfoId=${encodeURIComponent(id)}`);
   };
 
   const handleAddProject = () => {
     setShowProfilePopup(false);
+    setSelectedProject('new');
+    setSelectedProjectName('New Project');
     router.push('/training?productInfoId=new');
   };
 
@@ -120,7 +179,7 @@ const NavbarContent = () => {
           {/* Text block on the right */}
           <div className="flex flex-col items-start justify-center">
             <span className="text-[14px] font-bold text-white leading-tight mb-0.5">Jordan</span>
-            <span className="text-[11px] font-medium text-gray-400 leading-tight">Jordan Projects</span>
+            <span className="text-[11px] font-medium text-gray-400 leading-tight">{selectedProjectName}</span>
           </div>
 
           {/* Chevron */}
@@ -141,7 +200,7 @@ const NavbarContent = () => {
                 </div>
                 <div className="flex flex-col">
                   <span className="text-gray-900 font-extrabold text-[15px] leading-tight">Jordan</span>
-                  <span className="text-gray-500 font-semibold text-[11px]">Jordan Projects</span>
+                  <span className="text-gray-500 font-semibold text-[11px]">{selectedProjectName}</span>
                 </div>
               </div>
 
@@ -161,7 +220,9 @@ const NavbarContent = () => {
                     <div
                       key={proj.id}
                       onClick={() => handleSelectProject(proj.id)}
-                      className="group flex items-center justify-between cursor-pointer hover:bg-gray-50 p-1.5 -mx-1.5 rounded-xl transition-colors"
+                      className={`group flex items-center justify-between cursor-pointer hover:bg-gray-50 p-1.5 -mx-1.5 rounded-xl transition-colors ${
+                        proj.id === selectedProjectId ? 'bg-gray-50' : ''
+                      }`}
                     >
                       <span className="text-gray-700 font-bold text-[13.5px] tracking-tight">{proj.name}</span>
                       <ChevronRight size={18} className="text-gray-400 group-hover:text-gray-900 transition-colors" />

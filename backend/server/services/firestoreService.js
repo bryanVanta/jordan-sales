@@ -99,6 +99,26 @@ async function getAllLeads() {
   }
 }
 
+async function getLeadsByProductInfoId(productInfoId) {
+  try {
+    let snapshot;
+    try {
+      snapshot = await db
+        .collection('leads')
+        .where('productInfoId', '==', productInfoId)
+        .orderBy('updatedAt', 'desc')
+        .get();
+    } catch (error) {
+      // Be resilient to missing composite index / mixed updatedAt types.
+      snapshot = await db.collection('leads').where('productInfoId', '==', productInfoId).get();
+    }
+    return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+  } catch (error) {
+    console.error('Error getting leads by productInfoId:', error);
+    throw error;
+  }
+}
+
 async function getLeadsByCompany(companyId) {
   try {
     const snapshot = await db.collection('leads').where('companyId', '==', companyId).get();
@@ -160,6 +180,7 @@ module.exports = {
   createLead,
   getLead,
   getAllLeads,
+  getLeadsByProductInfoId,
   getLeadsByCompany,
   updateLead,
   // Messages

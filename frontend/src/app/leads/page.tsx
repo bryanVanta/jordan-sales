@@ -1,11 +1,18 @@
 "use client";
-import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Search, Filter, Play, Pause, Plus, FileUp, Edit3, Check, ChevronUp, ChevronDown, X, Mail, MessageCircle, Send, ChevronRight, Loader } from 'lucide-react';
+import React, { Suspense, useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { Search, Filter, Play, Pause, Plus, FileUp, Edit3, Check, Minus, ChevronUp, ChevronDown, X, Mail, MessageCircle, Send, ChevronRight, Loader } from 'lucide-react';
+import { useRouter, useSearchParams } from 'next/navigation';
 
-const API_BASE_URL = `${process.env.NEXT_PUBLIC_BACKEND_URL}/api`; // Fetching API base URL with /api endpoint from environment variables
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
+const API_BASE_URL = `${BACKEND_URL}/api`; // Fetching API base URL with /api endpoint from environment variables
+const SELECTED_PROJECT_STORAGE_KEY = 'jordan:selectedProjectId';
+const PROJECT_CHANGED_EVENT = 'jordan:projectChanged';
 
-export default function ProjectsPage() {
+function LeadsPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [projects, setProjects] = useState<any[]>([]);
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('current');
   const [searchTerm, setSearchTerm] = useState('');
   const [isOutreachActive, setIsOutreachActive] = useState(false);
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
@@ -32,7 +39,7 @@ export default function ProjectsPage() {
     // Poll every 500ms during active search
     progressIntervalRef.current = setInterval(async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/progress/current`);
+        const response = await fetch(`${API_BASE_URL}/progress/${encodeURIComponent(selectedProjectId || 'current')}`);
         if (response.ok) {
           const progressData = await response.json();
           setProgress(progressData);
@@ -50,6 +57,39 @@ export default function ProjectsPage() {
     }
   };
 
+  useEffect(() => {
+    const productInfoIdFromUrl = searchParams.get('productInfoId');
+    if (productInfoIdFromUrl) {
+      setSelectedProjectId(productInfoIdFromUrl);
+      try {
+        window.localStorage.setItem(SELECTED_PROJECT_STORAGE_KEY, productInfoIdFromUrl);
+      } catch {}
+      return;
+    }
+
+    try {
+      const stored = window.localStorage.getItem(SELECTED_PROJECT_STORAGE_KEY);
+      if (stored) {
+        setSelectedProjectId(stored);
+        router.replace(`/leads?productInfoId=${encodeURIComponent(stored)}`);
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    const handler = (event: any) => {
+      const id = event?.detail?.id;
+      if (!id) return;
+      setSelectedProjectId(String(id));
+      router.replace(`/leads?productInfoId=${encodeURIComponent(String(id))}`);
+    };
+
+    window.addEventListener(PROJECT_CHANGED_EVENT, handler as EventListener);
+    return () => window.removeEventListener(PROJECT_CHANGED_EVENT, handler as EventListener);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const loadLeads = useCallback(async (pageOffset = 0, append = false) => {
     if (!append) setLoading(true);
     setLoadingMore(append);
@@ -59,11 +99,15 @@ export default function ProjectsPage() {
     startProgressTracking();
 
     try {
-      const endpoint = pageOffset > 0 ? `${API_BASE_URL}/scraping/find-leads?offset=${pageOffset}` : `${API_BASE_URL}/leads`;
+      const projectId = selectedProjectId || 'current';
+      const endpoint =
+        pageOffset > 0
+          ? `${API_BASE_URL}/scraping/find-leads?offset=${pageOffset}&productInfoId=${encodeURIComponent(projectId)}`
+          : `${API_BASE_URL}/leads?productInfoId=${encodeURIComponent(projectId)}`;
       const response = await fetch(endpoint, {
         method: pageOffset > 0 ? 'POST' : 'GET',
         headers: pageOffset > 0 ? { 'Content-Type': 'application/json' } : {},
-        body: pageOffset > 0 ? JSON.stringify({ offset: pageOffset }) : undefined,
+        body: pageOffset > 0 ? JSON.stringify({ offset: pageOffset, productInfoId: projectId }) : undefined,
       });
       
       if (!response.ok) {
@@ -71,7 +115,9 @@ export default function ProjectsPage() {
       }
 
       const result = await response.json();
-      const newRows = (result.data?.leads || result.data || []).map((lead: any) => ({
+      const rawLeads = (result.data?.leads || result.data || []) as any[];
+      const filteredLeads = rawLeads.filter((lead: any) => String(lead?.productInfoId || 'current') === projectId);
+      const newRows = filteredLeads.map((lead: any) => ({
         id: String(lead.id),
         company: lead.companyName || lead.company || 'Unknown Company',
         person: lead.person || '',
@@ -99,7 +145,7 @@ export default function ProjectsPage() {
       stopProgressTracking();
       setProgress({ status: 'idle' });
     }
-  }, []);
+  }, [selectedProjectId]);
 
   const handleLoadMore = () => {
     loadLeads(offset + 10, true); // Load next 10 (append mode)
@@ -109,6 +155,14 @@ export default function ProjectsPage() {
     loadLeads();
     return () => stopProgressTracking(); // Cleanup on unmount
   }, [loadLeads]);
+
+  useEffect(() => {
+    // When project changes, reset pagination and reload leads
+    setOffset(0);
+    setSelectedProjects([]);
+    loadLeads(0, false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedProjectId]);
 
   const filteredProjects = useMemo(() => {
     let items = projects.filter(proj => 
@@ -131,6 +185,25 @@ export default function ProjectsPage() {
 
   const toggleProject = (id: string) => {
     setSelectedProjects(prev => prev.includes(id) ? prev.filter(l => l !== id) : [...prev, id]);
+  };
+
+  const visibleIds = useMemo(() => filteredProjects.map((proj) => proj.id), [filteredProjects]);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => selectedProjects.includes(id));
+  const someVisibleSelected = visibleIds.some((id) => selectedProjects.includes(id)) && !allVisibleSelected;
+
+  const toggleSelectAllVisible = () => {
+    setSelectedProjects((prev) => {
+      if (visibleIds.length === 0) return prev;
+
+      if (allVisibleSelected) {
+        const visibleSet = new Set(visibleIds);
+        return prev.filter((id) => !visibleSet.has(id));
+      }
+
+      const next = new Set(prev);
+      visibleIds.forEach((id) => next.add(id));
+      return Array.from(next);
+    });
   };
 
   const handleSort = (key: string) => {
@@ -346,7 +419,21 @@ export default function ProjectsPage() {
           <table className="w-full text-left border-collapse min-w-[1520px]">
             <thead className="sticky top-0 z-20">
               <tr className="border-b border-gray-100 bg-white/95 backdrop-blur-sm">
-                <th className="py-3 pl-8 pr-4 w-12 text-center sticky left-0 z-30 bg-white shadow-[2px_0_0_rgba(0,0,0,0.05)]"></th>
+                <th className="py-3 pl-8 pr-4 w-12 text-center sticky left-0 z-30 bg-white shadow-[2px_0_0_rgba(0,0,0,0.05)]">
+                  <div
+                    onClick={toggleSelectAllVisible}
+                    title={allVisibleSelected ? 'Deselect all' : 'Select all'}
+                    className={`w-4 h-4 border-2 rounded mx-auto cursor-pointer flex items-center justify-center transition-all ${
+                      allVisibleSelected || someVisibleSelected ? 'bg-blue-600 border-blue-600' : 'border-gray-200'
+                    }`}
+                  >
+                    {allVisibleSelected ? (
+                      <Check size={10} className="text-white font-bold" />
+                    ) : someVisibleSelected ? (
+                      <Minus size={10} className="text-white font-bold" />
+                    ) : null}
+                  </div>
+                </th>
                 <th className="py-3 px-4 group cursor-pointer sticky left-12 z-30 bg-white shadow-[2px_0_0_rgba(0,0,0,0.05)]" onClick={() => handleSort('company')}>
                   <div className="flex items-center text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap group-hover:text-blue-600">Company Name <ChevronDown size={10} className="ml-1 opacity-20" /></div>
                 </th>
@@ -518,5 +605,13 @@ export default function ProjectsPage() {
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #cbd5e1; }
       `}</style>
     </div>
+  );
+}
+
+export default function ProjectsPage() {
+  return (
+    <Suspense fallback={null}>
+      <LeadsPageInner />
+    </Suspense>
   );
 }

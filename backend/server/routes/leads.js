@@ -9,6 +9,7 @@ const {
   createLead,
   getLead,
   getAllLeads,
+  getLeadsByProductInfoId,
   getLeadsByCompany,
   updateLead,
 } = require('../services/firestoreService');
@@ -16,7 +17,8 @@ const {
 // Get all leads
 router.get('/', async (req, res) => {
   try {
-    const leads = await getAllLeads();
+    const productInfoId = req.query.productInfoId ? String(req.query.productInfoId) : '';
+    const leads = productInfoId ? await getLeadsByProductInfoId(productInfoId) : await getAllLeads();
     res.json({ success: true, data: leads });
   } catch (error) {
     res.status(500).json({ success: false, error: error.message });

@@ -134,22 +134,37 @@ Do not include any other text or explanation.`;
  */
 const analyzeSingleLead = async (leadId) => {
   try {
-    // Fetch all messages for this lead
-    const outreachSnapshot = await db
-      .collection('outreach_history')
-      .where('leadId', '==', leadId)
-      .get();
+    // Fetch all messages for this lead across outbound + inbound channels
+    const [outreachSnapshot, inboundEmailSnapshot, inboundWhatsAppSnapshot] = await Promise.all([
+      db.collection('outreach_history').where('leadId', '==', leadId).get(),
+      db.collection('inbound_emails').where('leadId', '==', leadId).get(),
+      db.collection('inbound_whatsapp').where('leadId', '==', leadId).get().catch(() => null),
+    ]);
 
-    const inboundSnapshot = await db
-      .collection('inbound_emails')
-      .where('leadId', '==', leadId)
-      .get();
+    const outreachMessages = outreachSnapshot.docs.map((doc) => {
+      const data = doc.data() || {};
+      return {
+        ...data,
+        status: data.status || 'sent',
+      };
+    });
+
+    const inboundEmailMessages = inboundEmailSnapshot.docs.map((doc) => ({
+      ...doc.data(),
+      status: 'received',
+      channel: 'email',
+    }));
+
+    const inboundWhatsAppMessages = inboundWhatsAppSnapshot
+      ? inboundWhatsAppSnapshot.docs.map((doc) => ({
+          ...doc.data(),
+          status: 'received',
+          channel: 'whatsapp',
+        }))
+      : [];
 
     // Combine all messages
-    const allMessages = [
-      ...outreachSnapshot.docs.map(doc => ({ ...doc.data(), status: 'sent' })),
-      ...inboundSnapshot.docs.map(doc => ({ ...doc.data(), status: 'received' }))
-    ];
+    const allMessages = [...outreachMessages, ...inboundEmailMessages, ...inboundWhatsAppMessages];
 
     // Skip leads with no messages - don't analyze or update
     if (allMessages.length === 0) {
@@ -167,7 +182,9 @@ const analyzeSingleLead = async (leadId) => {
     // If there's no inbound (customer) reply yet, don't ask the LLM to guess "warm/hot"
     // based only on our outbound messages. Use a simple time-based heuristic.
     let sentiment;
-    if (inboundSnapshot.empty) {
+    const hasInboundReply = allMessages.some((msg) => String(msg.status || '').toLowerCase() === 'received');
+
+    if (!hasInboundReply) {
       const lastMsg = allMessages[allMessages.length - 1];
       const lastTime = (lastMsg.createdAt || lastMsg.timestamp)?.toDate?.() || new Date(lastMsg.createdAt || lastMsg.timestamp);
       const hoursSinceLastOutbound = (Date.now() - new Date(lastTime).getTime()) / (1000 * 60 * 60);

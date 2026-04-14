@@ -7,7 +7,7 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
 const resendService = require('../services/resendService');
-const { triggerSentimentAnalysis } = require('../services/sentimentService');
+const { processInboundAutoReply } = require('../services/autoReplyService');
 
 /**
  * POST /api/webhooks/inbound-email
@@ -95,11 +95,23 @@ router.post('/inbound-email', async (req, res) => {
 
     console.log(`[Webhook] Inbound email also saved to outreach_history for chat display`);
 
-    // Trigger sentiment analysis if we found a lead (non-blocking)
     if (leadId) {
-      triggerSentimentAnalysis(leadId, inboundEmail.sender)
-        .then(sentiment => console.log(`[Webhook] Sentiment updated for lead ${leadId}: ${sentiment}`))
-        .catch(err => console.error(`[Webhook] Error updating sentiment:`, err.message));
+      processInboundAutoReply({
+        leadId,
+        channel: 'email',
+        inboundMessage: inboundEmail.content,
+        inboundSubject: inboundEmail.subject,
+        sender: inboundEmail.sender,
+        inboundMessageId: inboundEmail.messageId,
+      })
+        .then((result) => {
+          if (result?.skipped) {
+            console.log(`[Webhook] Email auto-reply skipped for lead ${leadId}: ${result.reason}`);
+          } else {
+            console.log(`[Webhook] Email auto-reply sent for lead ${leadId}`);
+          }
+        })
+        .catch((err) => console.error(`[Webhook] Error running email auto-reply:`, err.message));
     }
 
     res.json({
@@ -272,9 +284,21 @@ router.post('/inbound-whatsapp', async (req, res) => {
     });
 
     if (leadId) {
-      triggerSentimentAnalysis(leadId, from)
-        .then((sentiment) => console.log(`[Webhook] Sentiment updated for lead ${leadId}: ${sentiment}`))
-        .catch((err) => console.error(`[Webhook] Error updating sentiment:`, err.message));
+      processInboundAutoReply({
+        leadId,
+        channel: 'whatsapp',
+        inboundMessage: String(body),
+        sender: from,
+        inboundMessageId: messageId || '',
+      })
+        .then((result) => {
+          if (result?.skipped) {
+            console.log(`[Webhook] WhatsApp auto-reply skipped for lead ${leadId}: ${result.reason}`);
+          } else {
+            console.log(`[Webhook] WhatsApp auto-reply sent for lead ${leadId}`);
+          }
+        })
+        .catch((err) => console.error(`[Webhook] Error running WhatsApp auto-reply:`, err.message));
     }
 
     res.json({ success: true, recordId: inboundRecord.id });

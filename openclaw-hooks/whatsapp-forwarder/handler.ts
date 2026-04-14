@@ -94,6 +94,8 @@ const handler = async (event: OpenClawHookEvent) => {
     });
 
     const debug = process.env.WHATSAPP_FORWARDER_DEBUG === '1';
+    const eventAction = String((event as any).action || '').trim().toLowerCase();
+    const eventType = String((event as any).type || '').trim().toLowerCase();
 
     const channelId =
       event.context?.channelId ||
@@ -111,11 +113,22 @@ const handler = async (event: OpenClawHookEvent) => {
       isWhatsAppChannel((event as any).context?.metadata?.channel) ||
       false;
 
+    if (eventType === 'message' && eventAction && eventAction !== 'received') {
+      if (debug) {
+        console.log('[whatsapp-forwarder] skip (non-received action)', {
+          type: eventType,
+          action: eventAction,
+          sessionKey: (event as any).sessionKey || null,
+        });
+      }
+      return;
+    }
+
     if (!isWhatsApp) {
       if (debug) {
         console.log('[whatsapp-forwarder] ignore (not whatsapp)', {
-          type: (event as any).type || null,
-          action: (event as any).action || null,
+          type: eventType || null,
+          action: eventAction || null,
           sessionKey: (event as any).sessionKey || null,
           channelId,
           contextKeys: Object.keys((event as any).context || {}),

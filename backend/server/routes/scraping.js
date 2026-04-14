@@ -1,19 +1,25 @@
 const express = require('express');
 const router = express.Router();
-const { saveCurrentProductInfo, getCurrentProductInfo } = require('../services/productInfoService');
+const { saveProductInfo, getProductInfo, CURRENT_DOC_ID } = require('../services/productInfoService');
 const { findLeadsFromProductInfo } = require('../services/scrapingService');
 const { getProductInfoCache, refreshProductInfo } = require('../services/initializationService');
 
 router.post('/find-leads', async (req, res) => {
   try {
     let incomingProductInfo;
+    const requestedProductInfoId = req.body?.productInfoId || req.query?.productInfoId || CURRENT_DOC_ID;
 
     if (req.body && Object.keys(req.body).length > 0) {
       // New data provided: save it and use it
-      incomingProductInfo = await saveCurrentProductInfo(req.body);
+      const payload = { ...(req.body || {}) };
+      delete payload.productInfoId;
+      delete payload.offset;
+      incomingProductInfo = await saveProductInfo(requestedProductInfoId, payload);
     } else {
       // No new data: try cached version first, then fetch from Firebase
-      incomingProductInfo = getProductInfoCache() || await getCurrentProductInfo();
+      incomingProductInfo =
+        (requestedProductInfoId === CURRENT_DOC_ID ? getProductInfoCache() : null) ||
+        await getProductInfo(requestedProductInfoId);
     }
 
     if (!incomingProductInfo) {

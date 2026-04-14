@@ -1,13 +1,19 @@
 "use client";
-import React, { useState, Suspense } from 'react';
+import React, { useEffect, useState, Suspense } from 'react';
 import { ChevronDown, ChevronRight, Plus, User } from 'lucide-react';
 import Link from 'next/link';
-import { usePathname, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 
 const NavbarContent = () => {
   const [showProfilePopup, setShowProfilePopup] = useState(false);
+  const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [projectsError, setProjectsError] = useState('');
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
+  const API_BASE_URL = `${BACKEND_URL}/api`;
 
   const getPageTitle = () => {
     if (pathname === '/') return 'Dashboard';
@@ -22,10 +28,70 @@ const NavbarContent = () => {
     return 'Dashboard';
   };
 
-  const projects = [
-    { name: 'Hotel Management Project', id: 1 },
-    { name: 'Card Grading Project', id: 2 }
-  ];
+  const loadProjects = async () => {
+    setProjectsLoading(true);
+    setProjectsError('');
+    try {
+      const response = await fetch(`${API_BASE_URL}/product-info`, { cache: 'no-store' });
+      if (!response.ok) {
+        // Backwards-compatible fallback if backend hasn't been restarted yet (no list endpoint)
+        if (response.status === 404) {
+          const currentResponse = await fetch(`${API_BASE_URL}/product-info/current`, { cache: 'no-store' });
+          if (currentResponse.ok) {
+            const currentResult = await currentResponse.json();
+            const current = currentResult?.data;
+            if (current) {
+              setProjects([
+                {
+                  id: String(current.id || 'current'),
+                  name: (current.productName || '').trim() || 'Current Project',
+                },
+              ]);
+              return;
+            }
+          }
+        }
+
+        setProjectsError('Could not load projects.');
+        return;
+      }
+      const result = await response.json();
+      const items = Array.isArray(result.data) ? result.data : [];
+      setProjects(
+        items.map((item: any) => ({
+          id: String(item.id),
+          name: (item.productName || '').trim() || (item.id === 'current' ? 'Current Project' : 'Untitled Project'),
+        }))
+      );
+    } catch {
+      // Most common: backend not running / wrong port
+      setProjectsError(`Could not load projects (backend: ${BACKEND_URL}).`);
+    } finally {
+      setProjectsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadProjects();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (showProfilePopup) {
+      loadProjects();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showProfilePopup]);
+
+  const handleSelectProject = (id: string) => {
+    setShowProfilePopup(false);
+    router.push(`/training?productInfoId=${encodeURIComponent(id)}`);
+  };
+
+  const handleAddProject = () => {
+    setShowProfilePopup(false);
+    router.push('/training?productInfoId=new');
+  };
 
   return (
     <nav className="flex items-center justify-between px-8 py-5 w-full max-w-[1600px] mx-auto bg-transparent z-[100] relative">
@@ -84,17 +150,32 @@ const NavbarContent = () => {
 
               {/* Projects List */}
               <div className="space-y-4 mb-8">
-                {projects.map((proj) => (
-                  <div key={proj.id} className="group flex items-center justify-between cursor-pointer hover:bg-gray-50 p-1.5 -mx-1.5 rounded-xl transition-colors">
-                    <span className="text-gray-700 font-bold text-[13.5px] tracking-tight">{proj.name}</span>
-                    <ChevronRight size={18} className="text-gray-400 group-hover:text-gray-900 transition-colors" />
-                  </div>
-                ))}
+                {projectsLoading ? (
+                  <div className="text-gray-400 font-semibold text-[12px]">Loading projects...</div>
+                ) : projectsError ? (
+                  <div className="text-gray-400 font-semibold text-[12px]">{projectsError}</div>
+                ) : projects.length === 0 ? (
+                  <div className="text-gray-400 font-semibold text-[12px]">No projects yet. Click “Add Project”.</div>
+                ) : (
+                  projects.map((proj) => (
+                    <div
+                      key={proj.id}
+                      onClick={() => handleSelectProject(proj.id)}
+                      className="group flex items-center justify-between cursor-pointer hover:bg-gray-50 p-1.5 -mx-1.5 rounded-xl transition-colors"
+                    >
+                      <span className="text-gray-700 font-bold text-[13.5px] tracking-tight">{proj.name}</span>
+                      <ChevronRight size={18} className="text-gray-400 group-hover:text-gray-900 transition-colors" />
+                    </div>
+                  ))
+                )}
               </div>
 
               {/* Action Buttons */}
               <div className="flex gap-3 mt-auto">
-                <button className="flex-1 bg-gray-50 hover:bg-gray-100 text-gray-800 text-[11px] font-black py-2.5 rounded-2xl flex items-center justify-center gap-1.5 border border-gray-200 transition-colors">
+                <button
+                  onClick={handleAddProject}
+                  className="flex-1 bg-gray-50 hover:bg-gray-100 text-gray-800 text-[11px] font-black py-2.5 rounded-2xl flex items-center justify-center gap-1.5 border border-gray-200 transition-colors"
+                >
                   <Plus size={14} strokeWidth={3} /> Add Project
                 </button>
                 <button className="flex-1 bg-gray-50 hover:bg-gray-100 text-gray-800 text-[11px] font-black py-2.5 rounded-2xl flex items-center justify-center gap-1.5 border border-gray-200 transition-colors">

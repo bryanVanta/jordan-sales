@@ -1,7 +1,7 @@
 "use client";
 
-import React, { useEffect, useRef, useState } from 'react';
-import { useRouter } from 'next/navigation';
+import React, { Suspense, useEffect, useRef, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { 
   ChevronDown, 
   Upload, 
@@ -20,9 +20,74 @@ import {
   Save
 } from 'lucide-react';
 
-export default function TrainingPage() {
+type AppleToggleProps = {
+  enabled: boolean;
+  setEnabled: (value: boolean) => void;
+  label?: string;
+};
+
+const AppleToggle = ({ enabled, setEnabled, label }: AppleToggleProps) => (
+  <div className="flex items-center justify-between group cursor-pointer" onClick={() => setEnabled(!enabled)}>
+    {label && <span className="text-[13px] font-bold text-gray-700 tracking-tight group-hover:text-black transition-colors">{label}</span>}
+    <div className={`w-11 h-6 rounded-full p-1 transition-all duration-300 ease-in-out ${enabled ? 'bg-blue-600' : 'bg-gray-200'}`}>
+      <div className={`w-4 h-4 rounded-full bg-white shadow-sm transform transition-transform duration-300 ${enabled ? 'translate-x-5' : 'translate-x-0'}`}></div>
+    </div>
+  </div>
+);
+
+type FormInputProps = {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  type?: string;
+};
+
+const FormInput = ({ label, value, onChange, placeholder, type = "text" }: FormInputProps) => (
+  <div className="space-y-1.5 flex flex-col items-start w-full">
+    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{label}</label>
+    <input 
+      type={type}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className="w-full bg-white border border-gray-100 rounded-xl px-4 py-3 text-[13px] font-bold text-gray-800 focus:ring-2 focus:ring-blue-100 focus:border-blue-200 outline-none transition-all placeholder:text-gray-300 shadow-sm"
+    />
+  </div>
+);
+
+type FormSelectProps = {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: string[];
+};
+
+const FormSelect = ({ label, value, onChange, options }: FormSelectProps) => (
+  <div className="space-y-1.5 flex flex-col items-start w-full">
+    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{label}</label>
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="w-full bg-white border border-gray-100 rounded-xl px-4 py-3 text-[13px] font-bold text-gray-800 focus:ring-2 focus:ring-blue-100 focus:border-blue-200 outline-none transition-all shadow-sm"
+    >
+      {options.map((option: string) => (
+        <option key={option} value={option}>
+          {option}
+        </option>
+      ))}
+    </select>
+  </div>
+);
+
+function TrainingPageInner() {
   const router = useRouter();
-  const API_BASE_URL = `${process.env.NEXT_PUBLIC_BACKEND_URL}/api`; // Use environment variable for API base URL
+  const searchParams = useSearchParams();
+  const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
+  const API_BASE_URL = `${BACKEND_URL}/api`; // Use environment variable for API base URL
+  const productInfoIdFromUrl = searchParams.get('productInfoId') || 'current';
+  const [resolvedProductInfoId, setResolvedProductInfoId] = useState(productInfoIdFromUrl);
+  const justCreatedProjectIdRef = useRef<string | null>(null);
   const trainingAssetKeyMap: Record<string, 'companyInfo' | 'knowledgeBase' | 'salesPlaybook'> = {
     'Company Info': 'companyInfo',
     'Knowledge Base': 'knowledgeBase',
@@ -57,45 +122,6 @@ export default function TrainingPage() {
   const toneOptions = ['Default', 'Professional', 'Casual', 'Enthusiastic', 'Precise', 'Witty', 'Aggressive'];
   const productTypeOptions = ['Service', 'Product', 'Software', 'Consulting', 'Agency', 'Other'];
 
-  const AppleToggle = ({ enabled, setEnabled, label }: { enabled: boolean, setEnabled: (v: boolean) => void, label?: string }) => (
-    <div className="flex items-center justify-between group cursor-pointer" onClick={() => setEnabled(!enabled)}>
-      {label && <span className="text-[13px] font-bold text-gray-700 tracking-tight group-hover:text-black transition-colors">{label}</span>}
-      <div className={`w-11 h-6 rounded-full p-1 transition-all duration-300 ease-in-out ${enabled ? 'bg-blue-600' : 'bg-gray-200'}`}>
-        <div className={`w-4 h-4 rounded-full bg-white shadow-sm transform transition-transform duration-300 ${enabled ? 'translate-x-5' : 'translate-x-0'}`}></div>
-      </div>
-    </div>
-  );
-
-  const FormInput = ({ label, value, onChange, placeholder, type = "text" }: any) => (
-    <div className="space-y-1.5 flex flex-col items-start w-full">
-      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{label}</label>
-      <input 
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        placeholder={placeholder}
-        className="w-full bg-white border border-gray-100 rounded-xl px-4 py-3 text-[13px] font-bold text-gray-800 focus:ring-2 focus:ring-blue-100 focus:border-blue-200 outline-none transition-all placeholder:text-gray-300 shadow-sm"
-      />
-    </div>
-  );
-
-  const FormSelect = ({ label, value, onChange, options }: any) => (
-    <div className="space-y-1.5 flex flex-col items-start w-full">
-      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{label}</label>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="w-full bg-white border border-gray-100 rounded-xl px-4 py-3 text-[13px] font-bold text-gray-800 focus:ring-2 focus:ring-blue-100 focus:border-blue-200 outline-none transition-all shadow-sm"
-      >
-        {options.map((option: string) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-
   const triggerUpload = (label: string) => {
     setUploadingAsset(label);
     fileInputRef.current?.click();
@@ -120,7 +146,9 @@ export default function TrainingPage() {
       });
 
       const assetKey = trainingAssetKeyMap[uploadingAsset];
-      const response = await fetch(`${API_BASE_URL}/product-info/upload-asset`, {
+      const effectiveId = await ensureProjectId();
+
+      let response = await fetch(`${API_BASE_URL}/product-info/${encodeURIComponent(effectiveId)}/upload-asset`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -130,6 +158,24 @@ export default function TrainingPage() {
           contentBase64,
         }),
       });
+
+      // Backwards-compatible fallback if backend hasn't been restarted yet (only safe for `current`)
+      if (response.status === 404 && effectiveId === 'current') {
+        response = await fetch(`${API_BASE_URL}/product-info/upload-asset`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            assetKey,
+            fileName: file.name,
+            mimeType: file.type,
+            contentBase64,
+          }),
+        });
+      }
+
+      if (response.status === 404 && effectiveId !== 'current') {
+        throw new Error('Backend restart required to upload assets for new projects.');
+      }
 
       if (!response.ok) {
         let message = `Failed to upload ${file.name}`;
@@ -182,9 +228,31 @@ export default function TrainingPage() {
   });
 
   useEffect(() => {
+    setResolvedProductInfoId(productInfoIdFromUrl);
+  }, [productInfoIdFromUrl]);
+
+  useEffect(() => {
+    if (justCreatedProjectIdRef.current && justCreatedProjectIdRef.current === productInfoIdFromUrl) {
+      justCreatedProjectIdRef.current = null;
+      return;
+    }
+
+    setProductName('');
+    setProductType('Service');
+    setDescription('');
+    setBenefit('');
+    setTargetCustomer('');
+    setLocation('');
+    setMoreAboutProduct('');
+    setUploadedFiles({});
+
     const loadProductInfo = async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/product-info/current`);
+        if (productInfoIdFromUrl === 'new') {
+          return;
+        }
+
+        const response = await fetch(`${API_BASE_URL}/product-info/${encodeURIComponent(productInfoIdFromUrl)}`);
         if (!response.ok) return;
 
         const result = await response.json();
@@ -209,14 +277,49 @@ export default function TrainingPage() {
     };
 
     loadProductInfo();
-  }, []);
+  }, [productInfoIdFromUrl]);
+
+  const ensureProjectId = async () => {
+    if (resolvedProductInfoId !== 'new') return resolvedProductInfoId;
+
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE_URL}/product-info`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+    } catch {
+      setStatusMessage(`Backend not reachable (${BACKEND_URL}). Start the backend and try again.`);
+      throw new Error('Failed to create project');
+    }
+
+    if (!response.ok) {
+      if (response.status === 404) {
+        setStatusMessage('Restart backend to enable multi-project. For now, create the project by saving to current or restart the backend.');
+      }
+      throw new Error('Failed to create project');
+    }
+
+    const result = await response.json();
+    const newId = result?.data?.id;
+    if (!newId) {
+      throw new Error('Failed to create project');
+    }
+
+    justCreatedProjectIdRef.current = String(newId);
+    setResolvedProductInfoId(String(newId));
+    router.replace(`/training?productInfoId=${encodeURIComponent(String(newId))}`);
+    return String(newId);
+  };
 
   const handleSaveChanges = async () => {
     setSaveState('saving');
     setStatusMessage('');
 
     try {
-      const response = await fetch(`${API_BASE_URL}/product-info/current`, {
+      const effectiveId = await ensureProjectId();
+      const response = await fetch(`${API_BASE_URL}/product-info/${encodeURIComponent(effectiveId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildProductInfoPayload()),
@@ -241,7 +344,8 @@ export default function TrainingPage() {
     setStatusMessage('');
 
     try {
-      const response = await fetch(`${API_BASE_URL}/scraping/find-leads`, {
+      const effectiveId = await ensureProjectId();
+      const response = await fetch(`${API_BASE_URL}/scraping/find-leads?productInfoId=${encodeURIComponent(effectiveId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildProductInfoPayload()),
@@ -463,5 +567,13 @@ export default function TrainingPage() {
         .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.1); }
       `}</style>
     </div>
+  );
+}
+
+export default function TrainingPage() {
+  return (
+    <Suspense fallback={null}>
+      <TrainingPageInner />
+    </Suspense>
   );
 }

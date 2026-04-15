@@ -41,6 +41,7 @@ const OPENCLAW_JORDAN_NAMESPACE = process.env.OPENCLAW_JORDAN_NAMESPACE || 'jord
 const OPENCLAW_JORDAN_TRANSPORT = (process.env.OPENCLAW_JORDAN_TRANSPORT || 'rpc').trim().toLowerCase();
 const OPENCLAW_JORDAN_RPC_TIMEOUT_MS = Number(process.env.OPENCLAW_JORDAN_RPC_TIMEOUT_MS || 300000); // 5 minutes for expanded geographic search
 const OPENCLAW_JORDAN_HTTP_TIMEOUT_MS = Number(process.env.OPENCLAW_JORDAN_HTTP_TIMEOUT_MS || OPENCLAW_JORDAN_RPC_TIMEOUT_MS || 30000);
+const OPENCLAW_JORDAN_HTTP_POLL_INTERVAL_MS = Number(process.env.OPENCLAW_JORDAN_HTTP_POLL_INTERVAL_MS || 2000);
 const MAX_LEADS = 100; // Per-batch limit - reasonable for OpenClaw to handle reliably
 
 const shellEscapeSingleQuoted = (value = '') => String(value).replace(/'/g, `'\"'\"'`);
@@ -415,6 +416,54 @@ async function findLeadsWithOpenClawHttp(productInfo, previousCompanies = []) {
         timeout: OPENCLAW_JORDAN_HTTP_TIMEOUT_MS,
       }
     );
+
+    // Async bridge mode: returns 202 { jobId, statusUrl }. Poll until complete.
+    if (response.status === 202 && response.data?.statusUrl) {
+      const statusUrl = response.data.statusUrl;
+      const startedAt = Date.now();
+
+      const resolveStatusUrl = (candidate) => {
+        try {
+          // If candidate is absolute URL, keep it.
+          // If it is relative, resolve against gatewayUrl origin.
+          return new URL(candidate, gatewayUrl).toString();
+        } catch {
+          return candidate;
+        }
+      };
+
+      const pollUrl = resolveStatusUrl(statusUrl);
+      console.log('[OpenClaw] HTTP bridge accepted job. Polling:', pollUrl);
+
+      while (Date.now() - startedAt < OPENCLAW_JORDAN_HTTP_TIMEOUT_MS) {
+        await new Promise((r) => setTimeout(r, OPENCLAW_JORDAN_HTTP_POLL_INTERVAL_MS));
+
+        const statusResp = await axios.get(pollUrl, {
+          headers: {
+            ...(OPENCLAW_JORDAN_API_KEY ? { Authorization: `Bearer ${OPENCLAW_JORDAN_API_KEY}` } : {}),
+            ...(OPENCLAW_JORDAN_GATEWAY_TOKEN ? { 'x-gateway-token': OPENCLAW_JORDAN_GATEWAY_TOKEN } : {}),
+            ...(OPENCLAW_JORDAN_GATEWAY_TOKEN ? { 'x-openclaw-token': OPENCLAW_JORDAN_GATEWAY_TOKEN } : {}),
+          },
+          timeout: Math.min(15000, OPENCLAW_JORDAN_HTTP_TIMEOUT_MS),
+        });
+
+        const status = statusResp.data?.status;
+        if (status === 'complete') {
+          const leads = statusResp.data?.leads || [];
+          console.log('[OpenClaw] HTTP bridge job complete. Leads:', Array.isArray(leads) ? leads.length : 0);
+          return Array.isArray(leads)
+            ? leads.map((lead) => normalizeOpenClawLead(lead, productInfo.location || '')).slice(0, MAX_LEADS)
+            : [];
+        }
+        if (status === 'error') {
+          console.error('[OpenClaw] HTTP bridge job failed:', statusResp.data?.error || 'Unknown error');
+          return [];
+        }
+      }
+
+      console.error('[OpenClaw] HTTP bridge polling timed out');
+      return [];
+    }
 
     const rawLeads = response.data?.leads || response.data?.data?.leads || response.data?.results || [];
     console.log('[OpenClaw] HTTP response leads count:', rawLeads.length);

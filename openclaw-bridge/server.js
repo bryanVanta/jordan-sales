@@ -8,6 +8,9 @@ const OPENCLAW_GATEWAY_WS_URL = (process.env.OPENCLAW_GATEWAY_WS_URL || 'ws://12
 const OPENCLAW_AGENT_ID = (process.env.OPENCLAW_AGENT_ID || 'main').trim();
 const OPENCLAW_TIMEOUT_MS = Number(process.env.OPENCLAW_TIMEOUT_MS || 300000);
 const OPENCLAW_BRIDGE_DEBUG = String(process.env.OPENCLAW_BRIDGE_DEBUG || '').trim() === '1';
+const MAX_LEADS = Number(process.env.OPENCLAW_MAX_LEADS || 100);
+const OPENCLAW_BRIDGE_ASYNC_DEFAULT = String(process.env.OPENCLAW_BRIDGE_ASYNC || '1').trim() !== '0';
+const OPENCLAW_BRIDGE_JOB_TTL_MS = Number(process.env.OPENCLAW_BRIDGE_JOB_TTL_MS || 30 * 60 * 1000);
 
 const parseJsonObject = (text = '') => {
   const trimmed = String(text || '').trim();
@@ -53,6 +56,32 @@ const extractLeadsFromPayload = (payload) => {
   return [];
 };
 
+const extractLeadsFromOpenClawResponse = (parsed, stdout = '') => {
+  const direct = extractLeadsFromPayload(parsed?.result || parsed);
+  if (Array.isArray(direct) && direct.length > 0) return direct;
+
+  // Common OpenClaw CLI format: result.payloads[0].text contains JSON (or JSON fenced) as a string.
+  const payloadText =
+    parsed?.result?.payloads?.[0]?.text ||
+    parsed?.payloads?.[0]?.text ||
+    parsed?.result?.payloads?.[0]?.content ||
+    parsed?.payloads?.[0]?.content ||
+    '';
+
+  if (payloadText) {
+    const inner = parseJsonObject(payloadText);
+    const innerLeads = extractLeadsFromPayload(inner?.result || inner);
+    if (Array.isArray(innerLeads) && innerLeads.length > 0) return innerLeads;
+  }
+
+  // Last resort: sometimes the stdout itself includes the JSON object we want.
+  const fromStdout = parseJsonObject(stdout);
+  const stdoutLeads = extractLeadsFromPayload(fromStdout?.result || fromStdout);
+  if (Array.isArray(stdoutLeads) && stdoutLeads.length > 0) return stdoutLeads;
+
+  return [];
+};
+
 const normalizeLead = (lead = {}, fallbackLocation = '') => ({
   companyName: lead.companyName || lead.company || '',
   website: lead.website || lead.url || '',
@@ -65,23 +94,48 @@ const normalizeLead = (lead = {}, fallbackLocation = '') => ({
 });
 
 const buildJordanPrompt = (productInfo = {}, previousCompanies = []) => {
-  const productName = productInfo.productName || productInfo.name || 'the product';
-  const location = productInfo.location || productInfo.country || 'the target area';
-  const targetCustomer = productInfo.targetCustomer || productInfo.target || '';
-  const description = productInfo.description || '';
-  const exclude = Array.isArray(previousCompanies) && previousCompanies.length > 0 ? previousCompanies : [];
-
-  return (
-    `You are a lead finder. Find REAL companies that match the target customer for a sales outreach campaign.\n\n` +
-    `Product: ${productName}\n` +
-    (description ? `Description: ${description}\n` : '') +
-    (targetCustomer ? `Target customer: ${targetCustomer}\n` : '') +
-    `Location focus: ${location}\n\n` +
-    (exclude.length
-      ? `CRITICAL: Do NOT return any of these previously-contacted companies:\n- ${exclude.join('\n- ')}\n\n`
-      : '') +
-    `Return up to 50 leads as JSON with key "leads" (array). Each lead should include: companyName, website, location, email, phone, contactName, channel, notes.\n`
-  );
+  return JSON.stringify({
+    task: `Find up to ${MAX_LEADS} leads that match this product and target customer profile. Return diverse results from different companies, locations, and regions.`,
+    searchStrategy: {
+      diversification:
+        'CRITICAL: If you find the initial set of companies/locations exhausted, expand to other regions. For Malaysia: search beyond Kuala Lumpur (Selangor, Penang, Johor, Sabah, Sarawak). For hospitality: search resorts, guesthouses, vacation rentals, boutique accommodations. For retail: search different districts and shopping centers. For corporate: search different industries and company sizes.',
+      geographicExpansion:
+        'If searching Malaysia, expand to: Selangor, Subang Jaya, Petaling Jaya, Shah Alam, Kuching, George Town, Johor Bahru, Kota Kinabalu, Ipoh, Melaka beyond the primary location.',
+      minLeads: Math.min(50, MAX_LEADS),
+      targetLeads: MAX_LEADS,
+    },
+    exclusions:
+      Array.isArray(previousCompanies) && previousCompanies.length > 0
+        ? {
+            previouslyFoundCompanies: previousCompanies,
+            instruction: `CRITICAL - DO NOT RETURN ANY OF THESE COMPANIES: ${previousCompanies.join(
+              ', '
+            )}. Find completely different companies, locations, and regions. These have already been contacted. Search aggressively in new areas, different business types if applicable, and alternate locations.`,
+          }
+        : {
+            previouslyFoundCompanies: [],
+            instruction: 'No exclusions - search broadly for diverse leads across multiple locations and business types.',
+          },
+    output: {
+      instruction: 'Return ONLY strict JSON with this exact shape: {"leads":[...]} and no extra text.',
+      leadShape: {
+        company: 'string',
+        person: 'string',
+        email: 'string',
+        phone: 'phone',
+        location: 'string',
+        intent: 'string',
+        channel: 'Email|Phone|Whatsapp|LinkedIn|Other',
+        website: 'string',
+      },
+      constraints: {
+        maxLeads: MAX_LEADS,
+        preferPublicBusinessContacts: true,
+        noFabrication: true,
+      },
+    },
+    productInfo,
+  });
 };
 
 const getTokenFromRequest = (req) => {
@@ -162,22 +216,105 @@ const callOpenClawViaDocker = async ({ agentId, message, token, timeoutMs }) => 
 const app = express();
 app.use(express.json({ limit: '1mb' }));
 
+const jobs = new Map();
+
+const cleanupJobs = () => {
+  const now = Date.now();
+  for (const [jobId, job] of jobs.entries()) {
+    if (!job?.createdAt) continue;
+    if (now - job.createdAt > OPENCLAW_BRIDGE_JOB_TTL_MS) jobs.delete(jobId);
+  }
+};
+
+setInterval(cleanupJobs, Math.min(OPENCLAW_BRIDGE_JOB_TTL_MS, 5 * 60 * 1000)).unref?.();
+
 app.get('/health', (_req, res) => {
   res.status(200).json({ ok: true });
 });
 
+const runLeadJob = async (jobId) => {
+  const job = jobs.get(jobId);
+  if (!job) return;
+
+  job.status = 'running';
+  job.startedAt = Date.now();
+
+  try {
+    const message = buildJordanPrompt(job.productInfo, job.previousCompanies);
+    const { stdout } = await callOpenClawViaDocker({
+      agentId: job.agentId,
+      message,
+      token: job.token,
+      timeoutMs: OPENCLAW_TIMEOUT_MS,
+    });
+
+    const parsed = parseJsonObject(stdout);
+    const rawLeads = extractLeadsFromOpenClawResponse(parsed, stdout);
+    const leads = Array.isArray(rawLeads)
+      ? rawLeads.map((l) => normalizeLead(l, job.productInfo?.location || '')).filter((l) => l.companyName || l.website)
+      : [];
+
+    job.status = 'complete';
+    job.finishedAt = Date.now();
+    job.leads = leads;
+
+    if (job.debugRequested) {
+      job.debug = {
+        stdoutPreview: String(stdout || '').slice(0, 2000),
+        parsedType: parsed === null ? 'null' : Array.isArray(parsed) ? 'array' : typeof parsed,
+        parsedKeys: parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.keys(parsed).slice(0, 50) : [],
+      };
+      if (leads.length === 0) {
+        // eslint-disable-next-line no-console
+        console.log('[openclaw-bridge] 0 leads; stdout preview:', job.debug.stdoutPreview);
+      }
+    }
+  } catch (err) {
+    job.status = 'error';
+    job.finishedAt = Date.now();
+    job.error = String(err?.message || err);
+  }
+};
+
 // Compatibility endpoint: matches the backend's legacy HTTP transport.
+// Default behavior is async to avoid Cloudflare 524 timeouts for long-running lead searches.
+// Use ?sync=1 to force synchronous behavior.
 app.post('/jordan/find-leads', async (req, res) => {
+  const body = req.body || {};
+  const productInfo = body.productInfo || {};
+  const previousCompanies = body.previousCompanies || [];
+  const context = body.context || {};
+
+  const agentId = (context.agentId || OPENCLAW_AGENT_ID || 'main').toString();
+  const token = getTokenFromRequest(req);
+  const debugRequested = OPENCLAW_BRIDGE_DEBUG || String(req.query?.debug || '') === '1';
+  const syncRequested = String(req.query?.sync || '') === '1';
+
+  if (!syncRequested && OPENCLAW_BRIDGE_ASYNC_DEFAULT) {
+    const jobId = randomUUID();
+    jobs.set(jobId, {
+      id: jobId,
+      status: 'queued',
+      createdAt: Date.now(),
+      agentId,
+      token,
+      productInfo,
+      previousCompanies,
+      debugRequested,
+    });
+
+    setImmediate(() => runLeadJob(jobId));
+
+    res.status(202).json({
+      jobId,
+      statusUrl: `/jordan/find-leads/${jobId}`,
+    });
+    return;
+  }
+
+  // Synchronous mode (best for local testing; can hit Cloudflare 524 in production).
   const startMs = Date.now();
   try {
-    const body = req.body || {};
-    const productInfo = body.productInfo || {};
-    const previousCompanies = body.previousCompanies || [];
-    const context = body.context || {};
-
-    const agentId = (context.agentId || OPENCLAW_AGENT_ID || 'main').toString();
-    const token = getTokenFromRequest(req);
-
     const message = buildJordanPrompt(productInfo, previousCompanies);
     const { stdout } = await callOpenClawViaDocker({
       agentId,
@@ -187,16 +324,10 @@ app.post('/jordan/find-leads', async (req, res) => {
     });
 
     const parsed = parseJsonObject(stdout);
-    const rawLeads = extractLeadsFromPayload(parsed?.result || parsed);
+    const rawLeads = extractLeadsFromOpenClawResponse(parsed, stdout);
     const leads = Array.isArray(rawLeads)
       ? rawLeads.map((l) => normalizeLead(l, productInfo.location || '')).filter((l) => l.companyName || l.website)
       : [];
-
-    const debugRequested = OPENCLAW_BRIDGE_DEBUG || String(req.query?.debug || '') === '1';
-    if (debugRequested && leads.length === 0) {
-      // eslint-disable-next-line no-console
-      console.log('[openclaw-bridge] 0 leads; stdout preview:', String(stdout || '').slice(0, 2000));
-    }
 
     res.status(200).json({
       leads,
@@ -214,6 +345,36 @@ app.post('/jordan/find-leads', async (req, res) => {
   } catch (err) {
     res.status(502).json({ error: 'OpenClaw bridge failed', details: String(err.message || err) });
   }
+});
+
+app.get('/jordan/find-leads/:jobId', (req, res) => {
+  const jobId = String(req.params.jobId || '').trim();
+  const job = jobs.get(jobId);
+  if (!job) {
+    res.status(404).json({ error: 'Not Found' });
+    return;
+  }
+
+  const base = {
+    jobId,
+    status: job.status,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt || null,
+    finishedAt: job.finishedAt || null,
+    tookMs: job.finishedAt && job.startedAt ? job.finishedAt - job.startedAt : null,
+  };
+
+  if (job.status === 'complete') {
+    res.status(200).json({ ...base, leads: job.leads || [], ...(job.debug ? { debug: job.debug } : {}) });
+    return;
+  }
+
+  if (job.status === 'error') {
+    res.status(200).json({ ...base, error: job.error || 'Unknown error', ...(job.debug ? { debug: job.debug } : {}) });
+    return;
+  }
+
+  res.status(200).json(base);
 });
 
 app.listen(PORT, () => {

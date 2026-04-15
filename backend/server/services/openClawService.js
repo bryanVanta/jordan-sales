@@ -25,6 +25,9 @@ const axios = require('axios');
 const { randomUUID } = require('crypto');
 const { spawn } = require('child_process');
 
+const OPENCLAW_SSH_TARGET = (process.env.OPENCLAW_SSH_TARGET || 'jeff@192.168.100.199').trim();
+const OPENCLAW_CLI_PATH = (process.env.OPENCLAW_CLI_PATH || '/home/jeff/.npm-global/bin/openclaw').trim();
+
 const OPENCLAW_JORDAN_GATEWAY_BASE_URL = process.env.OPENCLAW_JORDAN_GATEWAY_BASE_URL;
 const OPENCLAW_JORDAN_REMOTE_GATEWAY_URL = process.env.OPENCLAW_JORDAN_REMOTE_GATEWAY_URL;
 const OPENCLAW_JORDAN_GATEWAY_TOKEN = process.env.OPENCLAW_JORDAN_GATEWAY_TOKEN;
@@ -37,7 +40,10 @@ const OPENCLAW_JORDAN_BOT_NAME = process.env.OPENCLAW_JORDAN_BOT_NAME || 'Jordan
 const OPENCLAW_JORDAN_NAMESPACE = process.env.OPENCLAW_JORDAN_NAMESPACE || 'jordan-sales';
 const OPENCLAW_JORDAN_TRANSPORT = (process.env.OPENCLAW_JORDAN_TRANSPORT || 'rpc').trim().toLowerCase();
 const OPENCLAW_JORDAN_RPC_TIMEOUT_MS = Number(process.env.OPENCLAW_JORDAN_RPC_TIMEOUT_MS || 300000); // 5 minutes for expanded geographic search
+const OPENCLAW_JORDAN_HTTP_TIMEOUT_MS = Number(process.env.OPENCLAW_JORDAN_HTTP_TIMEOUT_MS || OPENCLAW_JORDAN_RPC_TIMEOUT_MS || 30000);
 const MAX_LEADS = 100; // Per-batch limit - reasonable for OpenClaw to handle reliably
+
+const shellEscapeSingleQuoted = (value = '') => String(value).replace(/'/g, `'\"'\"'`);
 
 const normalizeOpenClawLead = (lead = {}, fallbackLocation = '') => ({
   companyName: lead.companyName || lead.company || '',
@@ -231,8 +237,9 @@ const buildJordanPrompt = (productInfo = {}, previousCompanies = []) => JSON.str
 
 async function findLeadsWithOpenClawCliViaSsh(productInfo, previousCompanies = []) {
   const wsUrl = getJordanGatewayWsUrl();
-  if (!wsUrl) {
-    console.error('[OpenClaw] No gateway URL configured');
+  const remoteGatewayUrl = OPENCLAW_JORDAN_REMOTE_GATEWAY_URL || wsUrl;
+  if (!remoteGatewayUrl) {
+    console.error('[OpenClaw] No remote gateway URL configured (set OPENCLAW_JORDAN_REMOTE_GATEWAY_URL)');
     return [];
   }
 
@@ -251,22 +258,29 @@ async function findLeadsWithOpenClawCliViaSsh(productInfo, previousCompanies = [
       // then passes it to openclaw (since --params expects a JSON string, not a file path)
       // Use OPENCLAW_JORDAN_REMOTE_GATEWAY_URL for the remote SSH-executed command
       // (not the localhost tunnel URL)
-      const remoteGatewayUrl = OPENCLAW_JORDAN_REMOTE_GATEWAY_URL || wsUrl;
-      const tokenArg = OPENCLAW_JORDAN_GATEWAY_TOKEN ? ` --token '${OPENCLAW_JORDAN_GATEWAY_TOKEN}'` : '';
-      const remoteCommand = `PARAMS="$(cat)"; OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 /home/jeff/.npm-global/bin/openclaw gateway call agent --json --expect-final --url '${remoteGatewayUrl}' --params "$PARAMS"${tokenArg} --timeout ${OPENCLAW_JORDAN_RPC_TIMEOUT_MS}`;
+      const tokenArg = OPENCLAW_JORDAN_GATEWAY_TOKEN
+        ? ` --token '${shellEscapeSingleQuoted(OPENCLAW_JORDAN_GATEWAY_TOKEN)}'`
+        : '';
+      const remoteCommand =
+        `PARAMS="$(cat)"; ` +
+        `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 ` +
+        `'${shellEscapeSingleQuoted(OPENCLAW_CLI_PATH)}' gateway call agent --json --expect-final ` +
+        `--url '${shellEscapeSingleQuoted(remoteGatewayUrl)}' --params "$PARAMS"${tokenArg} --timeout ${OPENCLAW_JORDAN_RPC_TIMEOUT_MS}`;
 
       console.log('[OpenClaw] Spawning SSH process to Ubuntu...');
+      console.log('[OpenClaw] SSH target:', OPENCLAW_SSH_TARGET);
+      console.log('[OpenClaw] Remote gateway URL:', remoteGatewayUrl);
+      if (/^ws(s)?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(remoteGatewayUrl)) {
+        console.warn('[OpenClaw] Remote gateway URL points to localhost. This will usually fail unless the gateway is running on the SSH host.');
+      }
 
       // SSH must be non-interactive: BatchMode=yes disables password prompts
       // Stdin is reserved for params JSON, not authentication
       const sshProcess = spawn('ssh', [
         '-o', 'BatchMode=yes',
-        'jeff@192.168.100.199',
+        OPENCLAW_SSH_TARGET,
         remoteCommand,
-      ], {
-        timeout: OPENCLAW_JORDAN_RPC_TIMEOUT_MS + 15000,
-        maxBuffer: 1024 * 1024 * 4,
-      });
+      ], { windowsHide: true });
 
       let stdout = '';
       let stderr = '';
@@ -293,16 +307,22 @@ async function findLeadsWithOpenClawCliViaSsh(productInfo, previousCompanies = [
             console.error('[OpenClaw] Remote command failed with exit code:', code);
             if (stderr) {
               console.error('[OpenClaw] stderr:', stderr.slice(0, 500));
+              if (/gateway timeout/i.test(stderr)) {
+                console.error('[OpenClaw] Hint: gateway timeout usually means the remote gateway URL/port is wrong or the gateway is down.');
+              }
+              if (/gateway token mismatch/i.test(stderr) || /unauthorized/i.test(stderr)) {
+                console.error('[OpenClaw] Hint: unauthorized/token mismatch. Ensure backend OPENCLAW_JORDAN_GATEWAY_TOKEN matches the gateway token configured on Ubuntu (see /home/jeff/.openclaw/openclaw.json: gateway.auth.token / gateway.remote.token).');
+              }
             }
           }
-          console.log('[OpenClaw] ⚠️ SSH failed, falling back to HTTP gateway...');
+          console.log('[OpenClaw] ⚠️ SSH failed');
           reject(new Error('SSH command failed: ' + (stderr.split('\n')[0] || `exit code ${code}`)));
           return;
         }
 
         if (!stdout) {
           console.error('[OpenClaw] No output received from remote command');
-          console.log('[OpenClaw] ⚠️ No output, falling back to HTTP gateway...');
+          console.log('[OpenClaw] ⚠️ No output from SSH command');
           reject(new Error('SSH: No output received'));
           return;
         }
@@ -313,7 +333,7 @@ async function findLeadsWithOpenClawCliViaSsh(productInfo, previousCompanies = [
 
           if (!parsed) {
             console.error('[OpenClaw] Failed to parse JSON response');
-            console.log('[OpenClaw] ⚠️ Parse error, falling back to HTTP gateway...');
+            console.log('[OpenClaw] ⚠️ Parse error from SSH response');
             reject(new Error('SSH: Failed to parse response'));
             return;
           }
@@ -328,7 +348,7 @@ async function findLeadsWithOpenClawCliViaSsh(productInfo, previousCompanies = [
           resolve(leads);
         } catch (parseError) {
           console.error('[OpenClaw] Error parsing response:', parseError.message);
-          console.log('[OpenClaw] ⚠️ Parse exception, falling back to HTTP gateway...');
+          console.log('[OpenClaw] ⚠️ Parse exception from SSH response');
           reject(new Error('SSH: Parse error - ' + parseError.message));
         }
       });
@@ -336,7 +356,7 @@ async function findLeadsWithOpenClawCliViaSsh(productInfo, previousCompanies = [
       // Handle process errors
       sshProcess.on('error', (error) => {
         console.error('[OpenClaw] SSH spawn error:', error.message);
-        console.log('[OpenClaw] ⚠️ SSH error, falling back to HTTP gateway...');
+        console.log('[OpenClaw] ⚠️ SSH spawn error');
         reject(new Error('SSH spawn failed: ' + error.message));
       });
 
@@ -347,7 +367,7 @@ async function findLeadsWithOpenClawCliViaSsh(productInfo, previousCompanies = [
 
     } catch (error) {
       console.error('[OpenClaw] Unexpected error:', error.message);
-      console.log('[OpenClaw] ⚠️ Unexpected error, falling back to HTTP gateway...');
+      console.log('[OpenClaw] ⚠️ Unexpected SSH setup error');
       reject(new Error('SSH setup failed: ' + error.message));
     }
   });
@@ -362,6 +382,10 @@ async function findLeadsWithOpenClawHttp(productInfo, previousCompanies = []) {
   }
 
   console.log('[OpenClaw] HTTP gateway URL:', gatewayUrl);
+  console.log('[OpenClaw] HTTP timeout (ms):', OPENCLAW_JORDAN_HTTP_TIMEOUT_MS);
+  if (/^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(gatewayUrl)) {
+    console.warn('[OpenClaw] HTTP fallback is pointing at localhost. If you are not running an SSH tunnel or local gateway, this will return 0 leads.');
+  }
 
   try {
     const response = await axios.post(
@@ -388,7 +412,7 @@ async function findLeadsWithOpenClawHttp(productInfo, previousCompanies = []) {
           ...(OPENCLAW_JORDAN_GATEWAY_TOKEN ? { 'x-gateway-token': OPENCLAW_JORDAN_GATEWAY_TOKEN } : {}),
           ...(OPENCLAW_JORDAN_GATEWAY_TOKEN ? { 'x-openclaw-token': OPENCLAW_JORDAN_GATEWAY_TOKEN } : {}),
         },
-        timeout: 30000,
+        timeout: OPENCLAW_JORDAN_HTTP_TIMEOUT_MS,
       }
     );
 
@@ -408,7 +432,7 @@ async function findLeadsWithOpenClawHttp(productInfo, previousCompanies = []) {
 }
 
 async function findLeadsWithOpenClaw(productInfo, previousCompanies = []) {
-  if (!OPENCLAW_JORDAN_GATEWAY_BASE_URL && !OPENCLAW_JORDAN_AGENT_URL) {
+  if (!OPENCLAW_JORDAN_GATEWAY_BASE_URL && !OPENCLAW_JORDAN_REMOTE_GATEWAY_URL && !OPENCLAW_JORDAN_AGENT_URL) {
     console.warn('[OpenClaw] ⚠️ No gateway configured, unable to search for leads');
     return [];
   }
@@ -424,6 +448,14 @@ async function findLeadsWithOpenClaw(productInfo, previousCompanies = []) {
     return await findLeadsWithOpenClawCliViaSsh(productInfo, previousCompanies);
   } catch (sshError) {
     console.warn(`[OpenClaw] SSH transport failed: ${sshError.message}`);
+
+    // If SSH fails due to auth/token mismatch, HTTP fallback is very unlikely to help and
+    // usually just results in localhost:0-leads noise. Surface the actionable error instead.
+    if (/gateway token mismatch/i.test(sshError.message) || /unauthorized/i.test(sshError.message)) {
+      console.error('[OpenClaw] Not attempting HTTP fallback due to unauthorized/token mismatch. Fix OPENCLAW_JORDAN_GATEWAY_TOKEN (must match Ubuntu gateway config) and retry.');
+      return [];
+    }
+
     console.log('[OpenClaw] Attempting HTTP transport (fallback)...');
     try {
       return await findLeadsWithOpenClawHttp(productInfo, previousCompanies);
@@ -478,18 +510,23 @@ async function generateMessageWithOpenClawCliViaSsh(productInfo, leadInfo) {
         return;
       }
 
-      const tokenArg = OPENCLAW_JORDAN_GATEWAY_TOKEN ? ` --token '${OPENCLAW_JORDAN_GATEWAY_TOKEN}'` : '';
-      const remoteCommand = `PARAMS="$(cat)"; OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 /home/jeff/.npm-global/bin/openclaw gateway call agent --json --expect-final --url '${remoteGatewayUrl}' --params "$PARAMS"${tokenArg} --timeout ${OPENCLAW_JORDAN_RPC_TIMEOUT_MS}`;
+      const tokenArg = OPENCLAW_JORDAN_GATEWAY_TOKEN
+        ? ` --token '${shellEscapeSingleQuoted(OPENCLAW_JORDAN_GATEWAY_TOKEN)}'`
+        : '';
+      const remoteCommand =
+        `PARAMS="$(cat)"; ` +
+        `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 ` +
+        `'${shellEscapeSingleQuoted(OPENCLAW_CLI_PATH)}' gateway call agent --json --expect-final ` +
+        `--url '${shellEscapeSingleQuoted(remoteGatewayUrl)}' --params "$PARAMS"${tokenArg} --timeout ${OPENCLAW_JORDAN_RPC_TIMEOUT_MS}`;
 
       console.log('[OpenClaw] Spawning SSH process to generate message...');
 
       const sshProcess = spawn('ssh', [
         '-o', 'BatchMode=yes',
-        'jeff@192.168.100.199',
+        OPENCLAW_SSH_TARGET,
         remoteCommand,
       ], {
-        timeout: OPENCLAW_JORDAN_RPC_TIMEOUT_MS + 15000,
-        maxBuffer: 1024 * 1024 * 4,
+        windowsHide: true,
       });
 
       let stdout = '';

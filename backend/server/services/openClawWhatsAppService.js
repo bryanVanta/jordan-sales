@@ -72,7 +72,7 @@ class OpenClawWhatsAppService {
     }
 
     const cli = OPENCLAW_CLI_PATH.replace(/'/g, `'\"'\"'`);
-    const remoteGatewayUrl = OPENCLAW_GATEWAY_URL || 'ws://127.0.0.1:18789';
+    const remoteGatewayUrl = OPENCLAW_GATEWAY_URL || 'ws://127.0.0.1:30080';
     const tokenArg = OPENCLAW_GATEWAY_TOKEN ? ` --token '${OPENCLAW_GATEWAY_TOKEN.replace(/'/g, `'\"'\"'`)}'` : '';
 
     // Use gateway RPC so we can always pass --url/--token reliably.

@@ -7,6 +7,7 @@ const DOCKER_CONTAINER = (process.env.OPENCLAW_DOCKER_CONTAINER || 'openclaw-sal
 const OPENCLAW_GATEWAY_WS_URL = (process.env.OPENCLAW_GATEWAY_WS_URL || 'ws://127.0.0.1:30080').trim();
 const OPENCLAW_AGENT_ID = (process.env.OPENCLAW_AGENT_ID || 'main').trim();
 const OPENCLAW_TIMEOUT_MS = Number(process.env.OPENCLAW_TIMEOUT_MS || 300000);
+const OPENCLAW_BRIDGE_DEBUG = String(process.env.OPENCLAW_BRIDGE_DEBUG || '').trim() === '1';
 
 const parseJsonObject = (text = '') => {
   const trimmed = String(text || '').trim();
@@ -167,6 +168,7 @@ app.get('/health', (_req, res) => {
 
 // Compatibility endpoint: matches the backend's legacy HTTP transport.
 app.post('/jordan/find-leads', async (req, res) => {
+  const startMs = Date.now();
   try {
     const body = req.body || {};
     const productInfo = body.productInfo || {};
@@ -190,7 +192,25 @@ app.post('/jordan/find-leads', async (req, res) => {
       ? rawLeads.map((l) => normalizeLead(l, productInfo.location || '')).filter((l) => l.companyName || l.website)
       : [];
 
-    res.status(200).json({ leads });
+    const debugRequested = OPENCLAW_BRIDGE_DEBUG || String(req.query?.debug || '') === '1';
+    if (debugRequested && leads.length === 0) {
+      // eslint-disable-next-line no-console
+      console.log('[openclaw-bridge] 0 leads; stdout preview:', String(stdout || '').slice(0, 2000));
+    }
+
+    res.status(200).json({
+      leads,
+      ...(debugRequested
+        ? {
+            debug: {
+              tookMs: Date.now() - startMs,
+              stdoutPreview: String(stdout || '').slice(0, 2000),
+              parsedType: parsed === null ? 'null' : Array.isArray(parsed) ? 'array' : typeof parsed,
+              parsedKeys: parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.keys(parsed).slice(0, 50) : [],
+            },
+          }
+        : {}),
+    });
   } catch (err) {
     res.status(502).json({ error: 'OpenClaw bridge failed', details: String(err.message || err) });
   }
@@ -204,4 +224,3 @@ app.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`[openclaw-bridge] gateway ws url: ${OPENCLAW_GATEWAY_WS_URL}`);
 });
-

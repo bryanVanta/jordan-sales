@@ -44,6 +44,39 @@ const OPENCLAW_JORDAN_HTTP_TIMEOUT_MS = Number(process.env.OPENCLAW_JORDAN_HTTP_
 const OPENCLAW_JORDAN_HTTP_POLL_INTERVAL_MS = Number(process.env.OPENCLAW_JORDAN_HTTP_POLL_INTERVAL_MS || 2000);
 const MAX_LEADS = 100; // Per-batch limit - reasonable for OpenClaw to handle reliably
 
+const truncateString = (value, maxLen) => {
+  const text = String(value ?? '');
+  if (!text) return '';
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, Math.max(0, maxLen - 1))}…`;
+};
+
+const pickProductInfoForLeadSearch = (input = {}) => {
+  const productName = input.productName || input.name || '';
+  const targetCustomer = input.targetCustomer || input.target || '';
+  const location = input.location || input.locationFocus || input.country || '';
+  const description = input.description || input.productDescription || input.summary || '';
+
+  const servicesRaw = input.services || input.offerings || input.features || [];
+  const services = Array.isArray(servicesRaw)
+    ? servicesRaw.map((s) => truncateString(typeof s === 'string' ? s : JSON.stringify(s), 200)).slice(0, 12)
+    : [];
+
+  const keywordsRaw = input.keywords || input.tags || [];
+  const keywords = Array.isArray(keywordsRaw)
+    ? keywordsRaw.map((k) => truncateString(k, 60)).slice(0, 20)
+    : [];
+
+  return {
+    productName: truncateString(productName, 120),
+    description: truncateString(description, 1200),
+    targetCustomer: truncateString(targetCustomer, 400),
+    location: truncateString(location, 120),
+    ...(services.length ? { services } : {}),
+    ...(keywords.length ? { keywords } : {}),
+  };
+};
+
 const shellEscapeSingleQuoted = (value = '') => String(value).replace(/'/g, `'\"'\"'`);
 
 const normalizeOpenClawLead = (lead = {}, fallbackLocation = '') => ({
@@ -192,7 +225,10 @@ const extractLeadsFromPayload = (payload) => {
   return [];
 };
 
-const buildJordanPrompt = (productInfo = {}, previousCompanies = []) => JSON.stringify({
+const buildJordanPrompt = (productInfo = {}, previousCompanies = []) => {
+  const slimProductInfo = pickProductInfoForLeadSearch(productInfo);
+
+  return JSON.stringify({
   task: `Find up to ${MAX_LEADS} leads that match this product and target customer profile. Return diverse results from different companies, locations, and regions.`,
   searchStrategy: {
     diversification: 'CRITICAL: If you find the initial set of companies/locations exhausted, expand to other regions. For Malaysia: search beyond Kuala Lumpur (Selangor, Penang, Johor, Sabah, Sarawak). For hospitality: search resorts, guesthouses, vacation rentals, boutique accommodations. For retail: search different districts and shopping centers. For corporate: search different industries and company sizes.',
@@ -233,8 +269,9 @@ const buildJordanPrompt = (productInfo = {}, previousCompanies = []) => JSON.str
     botName: OPENCLAW_JORDAN_BOT_NAME,
     namespace: OPENCLAW_JORDAN_NAMESPACE,
   },
-  productInfo,
+  productInfo: slimProductInfo,
 });
+};
 
 async function findLeadsWithOpenClawCliViaSsh(productInfo, previousCompanies = []) {
   const wsUrl = getJordanGatewayWsUrl();

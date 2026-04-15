@@ -11,6 +11,12 @@ const OPENCLAW_BRIDGE_DEBUG = String(process.env.OPENCLAW_BRIDGE_DEBUG || '').tr
 const MAX_LEADS = Number(process.env.OPENCLAW_MAX_LEADS || 100);
 const OPENCLAW_BRIDGE_ASYNC_DEFAULT = String(process.env.OPENCLAW_BRIDGE_ASYNC || '1').trim() !== '0';
 const OPENCLAW_BRIDGE_JOB_TTL_MS = Number(process.env.OPENCLAW_BRIDGE_JOB_TTL_MS || 30 * 60 * 1000);
+const OPENCLAW_BRIDGE_PRODUCTINFO_MODE = String(process.env.OPENCLAW_BRIDGE_PRODUCTINFO_MODE || 'full')
+  .trim()
+  .toLowerCase();
+const OPENCLAW_BRIDGE_MAX_STRING_CHARS = Number(process.env.OPENCLAW_BRIDGE_MAX_STRING_CHARS || 4000);
+const OPENCLAW_BRIDGE_MAX_ARRAY_ITEMS = Number(process.env.OPENCLAW_BRIDGE_MAX_ARRAY_ITEMS || 50);
+const OPENCLAW_BRIDGE_MAX_OBJECT_KEYS = Number(process.env.OPENCLAW_BRIDGE_MAX_OBJECT_KEYS || 80);
 
 const parseJsonObject = (text = '') => {
   const trimmed = String(text || '').trim();
@@ -50,15 +56,22 @@ const extractLeadsFromPayload = (payload) => {
   if (Array.isArray(payload?.leads)) return payload.leads;
   if (Array.isArray(payload?.data?.leads)) return payload.data.leads;
   if (Array.isArray(payload?.results)) return payload.results;
-  if (Array.isArray(payload?.payloads)) return payload.payloads;
   if (Array.isArray(payload?.result?.leads)) return payload.result.leads;
   if (Array.isArray(payload?.result?.data?.leads)) return payload.result.data.leads;
   return [];
 };
 
+const looksLikeLead = (value) =>
+  Boolean(
+    value &&
+      typeof value === 'object' &&
+      !Array.isArray(value) &&
+      (value.companyName || value.company || value.website || value.url)
+  );
+
 const extractLeadsFromOpenClawResponse = (parsed, stdout = '') => {
   const direct = extractLeadsFromPayload(parsed?.result || parsed);
-  if (Array.isArray(direct) && direct.length > 0) return direct;
+  if (Array.isArray(direct) && direct.some(looksLikeLead)) return direct;
 
   // Common OpenClaw CLI format: result.payloads[0].text contains JSON (or JSON fenced) as a string.
   const payloadText =
@@ -71,13 +84,13 @@ const extractLeadsFromOpenClawResponse = (parsed, stdout = '') => {
   if (payloadText) {
     const inner = parseJsonObject(payloadText);
     const innerLeads = extractLeadsFromPayload(inner?.result || inner);
-    if (Array.isArray(innerLeads) && innerLeads.length > 0) return innerLeads;
+    if (Array.isArray(innerLeads) && innerLeads.some(looksLikeLead)) return innerLeads;
   }
 
   // Last resort: sometimes the stdout itself includes the JSON object we want.
   const fromStdout = parseJsonObject(stdout);
   const stdoutLeads = extractLeadsFromPayload(fromStdout?.result || fromStdout);
-  if (Array.isArray(stdoutLeads) && stdoutLeads.length > 0) return stdoutLeads;
+  if (Array.isArray(stdoutLeads) && stdoutLeads.some(looksLikeLead)) return stdoutLeads;
 
   return [];
 };
@@ -93,7 +106,62 @@ const normalizeLead = (lead = {}, fallbackLocation = '') => ({
   notes: lead.notes || lead.intent || '',
 });
 
+const truncateString = (value, maxLen) => {
+  const text = String(value ?? '');
+  if (!text) return '';
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, Math.max(0, maxLen - 3))}...`;
+};
+
+const sanitizeForPrompt = (value, depth = 0) => {
+  if (value === null || value === undefined) return value;
+  if (typeof value === 'string') return truncateString(value, OPENCLAW_BRIDGE_MAX_STRING_CHARS);
+  if (typeof value === 'number' || typeof value === 'boolean') return value;
+  if (Array.isArray(value)) {
+    const slice = value.slice(0, Math.min(OPENCLAW_BRIDGE_MAX_ARRAY_ITEMS, value.length));
+    if (depth >= 4) return slice;
+    return slice.map((v) => sanitizeForPrompt(v, depth + 1));
+  }
+  if (typeof value === 'object') {
+    if (depth >= 4) return value;
+    const entries = Object.entries(value).slice(0, Math.max(0, OPENCLAW_BRIDGE_MAX_OBJECT_KEYS));
+    return Object.fromEntries(entries.map(([k, v]) => [k, sanitizeForPrompt(v, depth + 1)]));
+  }
+  return truncateString(String(value), OPENCLAW_BRIDGE_MAX_STRING_CHARS);
+};
+
+const pickProductInfoForLeadSearch = (input = {}) => {
+  const productName = input.productName || input.name || '';
+  const targetCustomer = input.targetCustomer || input.target || '';
+  const location = input.location || input.locationFocus || input.country || '';
+  const description = input.description || input.productDescription || input.summary || '';
+
+  const servicesRaw = input.services || input.offerings || input.features || [];
+  const services = Array.isArray(servicesRaw)
+    ? servicesRaw.map((s) => truncateString(typeof s === 'string' ? s : JSON.stringify(s), 200)).slice(0, 12)
+    : [];
+
+  const keywordsRaw = input.keywords || input.tags || [];
+  const keywords = Array.isArray(keywordsRaw)
+    ? keywordsRaw.map((k) => truncateString(k, 60)).slice(0, 20)
+    : [];
+
+  return {
+    productName: truncateString(productName, 120),
+    description: truncateString(description, 1200),
+    targetCustomer: truncateString(targetCustomer, 400),
+    location: truncateString(location, 120),
+    ...(services.length ? { services } : {}),
+    ...(keywords.length ? { keywords } : {}),
+  };
+};
+
 const buildJordanPrompt = (productInfo = {}, previousCompanies = []) => {
+  const preparedProductInfo =
+    OPENCLAW_BRIDGE_PRODUCTINFO_MODE === 'slim'
+      ? pickProductInfoForLeadSearch(productInfo)
+      : sanitizeForPrompt(productInfo);
+
   return JSON.stringify({
     task: `Find up to ${MAX_LEADS} leads that match this product and target customer profile. Return diverse results from different companies, locations, and regions.`,
     searchStrategy: {
@@ -134,7 +202,7 @@ const buildJordanPrompt = (productInfo = {}, previousCompanies = []) => {
         noFabrication: true,
       },
     },
-    productInfo,
+    productInfo: preparedProductInfo,
   });
 };
 
@@ -384,4 +452,12 @@ app.listen(PORT, () => {
   console.log(`[openclaw-bridge] docker container: ${DOCKER_CONTAINER}`);
   // eslint-disable-next-line no-console
   console.log(`[openclaw-bridge] gateway ws url: ${OPENCLAW_GATEWAY_WS_URL}`);
+  // eslint-disable-next-line no-console
+  console.log(`[openclaw-bridge] openclaw timeout (ms): ${OPENCLAW_TIMEOUT_MS}`);
+  // eslint-disable-next-line no-console
+  console.log(`[openclaw-bridge] max leads: ${MAX_LEADS}`);
+  // eslint-disable-next-line no-console
+  console.log(`[openclaw-bridge] async default: ${OPENCLAW_BRIDGE_ASYNC_DEFAULT ? 'on' : 'off'}`);
+  // eslint-disable-next-line no-console
+  console.log(`[openclaw-bridge] productInfo mode: ${OPENCLAW_BRIDGE_PRODUCTINFO_MODE}`);
 });

@@ -26,6 +26,8 @@ type AppleToggleProps = {
   label?: string;
 };
 
+const SELECTED_PROJECT_STORAGE_KEY = 'jordan:selectedProjectId';
+
 const AppleToggle = ({ enabled, setEnabled, label }: AppleToggleProps) => (
   <div className="flex items-center justify-between group cursor-pointer" onClick={() => setEnabled(!enabled)}>
     {label && <span className="text-[13px] font-bold text-gray-700 tracking-tight group-hover:text-black transition-colors">{label}</span>}
@@ -85,9 +87,32 @@ function TrainingPageInner() {
   const searchParams = useSearchParams();
   const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
   const API_BASE_URL = `${BACKEND_URL}/api`; // Use environment variable for API base URL
-  const productInfoIdFromUrl = searchParams.get('productInfoId') || 'current';
-  const [resolvedProductInfoId, setResolvedProductInfoId] = useState(productInfoIdFromUrl);
+  const productInfoIdFromUrl = searchParams.get('productInfoId');
+  const [resolvedProductInfoId, setResolvedProductInfoId] = useState(productInfoIdFromUrl || 'current');
   const justCreatedProjectIdRef = useRef<string | null>(null);
+  const effectiveProductInfoId = productInfoIdFromUrl || resolvedProductInfoId || 'current';
+
+  useEffect(() => {
+    // If URL has a project id, trust it and persist it.
+    if (productInfoIdFromUrl) {
+      if (productInfoIdFromUrl !== resolvedProductInfoId) setResolvedProductInfoId(productInfoIdFromUrl);
+      try {
+        window.localStorage.setItem(SELECTED_PROJECT_STORAGE_KEY, productInfoIdFromUrl);
+      } catch {}
+      return;
+    }
+
+    // If URL is missing, fall back to last selected project.
+    try {
+      const stored = window.localStorage.getItem(SELECTED_PROJECT_STORAGE_KEY);
+      if (stored && stored !== 'new' && stored !== effectiveProductInfoId) {
+        setResolvedProductInfoId(stored);
+        router.replace(`/training?productInfoId=${encodeURIComponent(stored)}`);
+      }
+    } catch {}
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [productInfoIdFromUrl]);
+
   const trainingAssetKeyMap: Record<string, 'companyInfo' | 'knowledgeBase' | 'salesPlaybook'> = {
     'Company Info': 'companyInfo',
     'Knowledge Base': 'knowledgeBase',
@@ -228,11 +253,7 @@ function TrainingPageInner() {
   });
 
   useEffect(() => {
-    setResolvedProductInfoId(productInfoIdFromUrl);
-  }, [productInfoIdFromUrl]);
-
-  useEffect(() => {
-    if (justCreatedProjectIdRef.current && justCreatedProjectIdRef.current === productInfoIdFromUrl) {
+    if (justCreatedProjectIdRef.current && justCreatedProjectIdRef.current === effectiveProductInfoId) {
       justCreatedProjectIdRef.current = null;
       return;
     }
@@ -248,11 +269,11 @@ function TrainingPageInner() {
 
     const loadProductInfo = async () => {
       try {
-        if (productInfoIdFromUrl === 'new') {
+        if (effectiveProductInfoId === 'new') {
           return;
         }
 
-        const response = await fetch(`${API_BASE_URL}/product-info/${encodeURIComponent(productInfoIdFromUrl)}`);
+        const response = await fetch(`${API_BASE_URL}/product-info/${encodeURIComponent(effectiveProductInfoId)}`);
         if (!response.ok) return;
 
         const result = await response.json();
@@ -277,7 +298,7 @@ function TrainingPageInner() {
     };
 
     loadProductInfo();
-  }, [productInfoIdFromUrl]);
+  }, [effectiveProductInfoId]);
 
   const ensureProjectId = async () => {
     if (resolvedProductInfoId !== 'new') return resolvedProductInfoId;

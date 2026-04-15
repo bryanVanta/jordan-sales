@@ -1,20 +1,41 @@
 "use client";
-import React, { Suspense } from 'react';
+import React, { Suspense, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { LayoutDashboard, MessageCircle, Send, Mail, Users, GraduationCap } from 'lucide-react';
 import { usePathname, useSearchParams } from 'next/navigation';
+
+const SELECTED_PROJECT_STORAGE_KEY = 'jordan:selectedProjectId';
 
 const BottomNavContent = () => {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   const platform = searchParams.get('platform') || 'whatsapp';
+  const productInfoIdFromUrl = searchParams.get('productInfoId');
+  const [storedProjectId, setStoredProjectId] = useState<string>('current');
   
   const isChatActive = pathname?.startsWith('/chats');
 
+  useEffect(() => {
+    if (productInfoIdFromUrl) {
+      setStoredProjectId(productInfoIdFromUrl);
+      try {
+        window.localStorage.setItem(SELECTED_PROJECT_STORAGE_KEY, productInfoIdFromUrl);
+      } catch {}
+      return;
+    }
+
+    try {
+      const stored = window.localStorage.getItem(SELECTED_PROJECT_STORAGE_KEY);
+      if (stored) setStoredProjectId(stored);
+    } catch {}
+  }, [productInfoIdFromUrl]);
+
+  const activeProjectId = useMemo(() => productInfoIdFromUrl || storedProjectId || 'current', [productInfoIdFromUrl, storedProjectId]);
+
   const regularItems = [
     { name: 'Dashboard', icon: LayoutDashboard, href: '/', bg: 'bg-[#E1DDFF]', iconCol: 'text-[#5035E4]' },
-    { name: 'Leads', icon: Users, href: '/leads', bg: 'bg-[#FEF1CE]', iconCol: 'text-[#C79100]' },
-    { name: 'Train', icon: GraduationCap, href: '/training', bg: 'bg-[#D6FBE0]', iconCol: 'text-[#1B893A]' },
+    { name: 'Leads', icon: Users, href: `/leads?productInfoId=${encodeURIComponent(activeProjectId)}`, bg: 'bg-[#FEF1CE]', iconCol: 'text-[#C79100]' },
+    { name: 'Train', icon: GraduationCap, href: `/training?productInfoId=${encodeURIComponent(activeProjectId)}`, bg: 'bg-[#D6FBE0]', iconCol: 'text-[#1B893A]' },
   ];
 
   const chatSubItems = [

@@ -28,6 +28,8 @@ function LeadsPageInner() {
   const [hasMoreLeads, setHasMoreLeads] = useState(false);
   const [progress, setProgress] = useState<any>({ status: 'idle' });
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const leadsRequestIdRef = useRef(0);
+  const leadsAbortRef = useRef<AbortController | null>(null);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add');
@@ -101,6 +103,15 @@ function LeadsPageInner() {
     // Start tracking progress
     startProgressTracking();
 
+    const requestId = ++leadsRequestIdRef.current;
+    if (leadsAbortRef.current) {
+      try {
+        leadsAbortRef.current.abort();
+      } catch {}
+    }
+    const controller = new AbortController();
+    leadsAbortRef.current = controller;
+
     try {
       const projectId = selectedProjectId || 'current';
       const endpoint =
@@ -111,6 +122,7 @@ function LeadsPageInner() {
         method: pageOffset > 0 ? 'POST' : 'GET',
         headers: pageOffset > 0 ? { 'Content-Type': 'application/json' } : {},
         body: pageOffset > 0 ? JSON.stringify({ offset: pageOffset, productInfoId: projectId }) : undefined,
+        signal: controller.signal,
       });
       
       if (!response.ok) {
@@ -136,13 +148,16 @@ function LeadsPageInner() {
         channel: lead.channel || 'Email',
       }));
       
+      if (requestId !== leadsRequestIdRef.current) return;
       setProjects(append ? (prevProjects) => [...prevProjects, ...newRows] : newRows);
       setOffset(pageOffset);
       setHasMoreLeads(newRows.length >= 10); // Show "Load More" if we got a full page (10 leads)
     } catch (loadError) {
+      if ((loadError as any)?.name === 'AbortError') return;
       console.error(loadError);
       setError('Could not load leads from the backend.');
     } finally {
+      if (requestId !== leadsRequestIdRef.current) return;
       setLoading(false);
       setLoadingMore(false);
       stopProgressTracking();
@@ -155,17 +170,24 @@ function LeadsPageInner() {
   };
 
   useEffect(() => {
-    loadLeads();
-    return () => stopProgressTracking(); // Cleanup on unmount
-  }, [loadLeads]);
-
-  useEffect(() => {
     // When project changes, reset pagination and reload leads
     setOffset(0);
     setSelectedProjects([]);
     loadLeads(0, false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
+
+  useEffect(() => {
+    return () => {
+      stopProgressTracking();
+      if (leadsAbortRef.current) {
+        try {
+          leadsAbortRef.current.abort();
+        } catch {}
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filteredProjects = useMemo(() => {
     let items = projects.filter(proj => 

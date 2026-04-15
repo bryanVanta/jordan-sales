@@ -35,7 +35,17 @@ function LeadsPageInner() {
     company: '', person: '', email: '', phone: '', whatsapp: '', location: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email'
   });
 
+  const stopProgressTracking = () => {
+    if (progressIntervalRef.current) {
+      clearInterval(progressIntervalRef.current);
+      progressIntervalRef.current = null;
+    }
+  };
+
   const startProgressTracking = () => {
+    // Ensure we never leak multiple intervals (causes status flicker)
+    stopProgressTracking();
+
     // Poll every 500ms during active search
     progressIntervalRef.current = setInterval(async () => {
       try {
@@ -48,13 +58,6 @@ function LeadsPageInner() {
         // Silent fail, not critical
       }
     }, 500);
-  };
-
-  const stopProgressTracking = () => {
-    if (progressIntervalRef.current) {
-      clearInterval(progressIntervalRef.current);
-      progressIntervalRef.current = null;
-    }
   };
 
   useEffect(() => {

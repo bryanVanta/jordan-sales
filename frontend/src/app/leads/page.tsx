@@ -14,6 +14,9 @@ function LeadsPageInner() {
   const [projects, setProjects] = useState<any[]>([]);
   const [selectedProjectId, setSelectedProjectId] = useState<string>('current');
   const [searchTerm, setSearchTerm] = useState('');
+  const [showFilters, setShowFilters] = useState(false);
+  const [filterChannel, setFilterChannel] = useState<string>('All');
+  const [filterTemp, setFilterTemp] = useState<string>('All');
   const [isOutreachActive, setIsOutreachActive] = useState(false);
   const [selectedProjects, setSelectedProjects] = useState<string[]>([]);
   const [outreachLoading, setOutreachLoading] = useState(false);
@@ -30,6 +33,7 @@ function LeadsPageInner() {
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const leadsRequestIdRef = useRef(0);
   const leadsAbortRef = useRef<AbortController | null>(null);
+  const filterPanelRef = useRef<HTMLDivElement>(null);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add');
@@ -189,13 +193,45 @@ function LeadsPageInner() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    if (!showFilters) return;
+
+    const onDocClick = (e: MouseEvent) => {
+      const el = filterPanelRef.current;
+      if (!el) return;
+      if (e.target instanceof Node && !el.contains(e.target)) setShowFilters(false);
+    };
+
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [showFilters]);
+
   const filteredProjects = useMemo(() => {
-    let items = projects.filter(proj => 
-      proj.company.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      proj.person.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      proj.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      proj.location.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+    const q = searchTerm.toLowerCase();
+    const channelFilter = filterChannel === 'All' ? '' : filterChannel.toLowerCase();
+    const tempFilter = filterTemp === 'All' ? '' : filterTemp.toLowerCase();
+
+    let items = projects.filter((proj) => {
+      const matchesText =
+        proj.company.toLowerCase().includes(q) ||
+        proj.person.toLowerCase().includes(q) ||
+        proj.email.toLowerCase().includes(q) ||
+        proj.location.toLowerCase().includes(q);
+
+      if (!matchesText) return false;
+
+      if (channelFilter) {
+        const projChannel = String(proj.channel || '').toLowerCase();
+        if (projChannel !== channelFilter) return false;
+      }
+
+      if (tempFilter) {
+        const projTemp = String(proj.temp || '').toLowerCase();
+        if (projTemp !== tempFilter) return false;
+      }
+
+      return true;
+    });
     if (sortConfig) {
       items.sort((a, b) => {
         const valA = (a as any)[sortConfig.key];
@@ -206,7 +242,7 @@ function LeadsPageInner() {
       });
     }
     return items;
-  }, [projects, searchTerm, sortConfig]);
+  }, [projects, searchTerm, sortConfig, filterChannel, filterTemp]);
 
   const toggleProject = (id: string) => {
     setSelectedProjects(prev => prev.includes(id) ? prev.filter(l => l !== id) : [...prev, id]);
@@ -359,7 +395,7 @@ function LeadsPageInner() {
 
   return (
     <div className="flex flex-col h-full px-4 sm:px-10 relative overflow-hidden pb-40 lg:pb-32">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 z-10 gap-4">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 z-40 gap-4">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 flex-1 w-full">
           <div className="relative w-full max-w-xs group">
             <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -371,9 +407,63 @@ function LeadsPageInner() {
               className="w-full bg-white border border-gray-100 rounded-xl py-2 pl-10 pr-4 text-[13px] font-bold outline-none focus:ring-2 focus:ring-blue-100 transition-all placeholder:text-gray-400 shadow-sm"
             />
           </div>
-          <button className="flex items-center justify-center gap-2 bg-white border border-gray-100 px-4 py-2 rounded-xl text-[13px] font-black text-gray-800 hover:bg-gray-50 transition-all">
-            <Filter size={16} className="text-blue-500" /> Filter
-          </button>
+          <div className="relative" ref={filterPanelRef}>
+            <button
+              onClick={() => setShowFilters((v) => !v)}
+              className="flex items-center justify-center gap-2 bg-white border border-gray-100 px-4 py-2 rounded-xl text-[13px] font-black text-gray-800 hover:bg-gray-50 transition-all"
+            >
+              <Filter size={16} className="text-blue-500" /> Filter
+            </button>
+
+            {showFilters && (
+              <div className="absolute left-0 top-[calc(100%+10px)] w-[260px] bg-white rounded-2xl shadow-[0_12px_40px_rgba(0,0,0,0.12)] border border-gray-100 p-4 z-[100]">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="text-[12px] font-black text-gray-800">Filters</div>
+                  <button
+                    onClick={() => {
+                      setFilterChannel('All');
+                      setFilterTemp('All');
+                    }}
+                    className="text-[11px] font-black text-blue-600 hover:text-blue-700"
+                  >
+                    Reset
+                  </button>
+                </div>
+
+                <div className="space-y-3">
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Channel</label>
+                    <select
+                      value={filterChannel}
+                      onChange={(e) => setFilterChannel(e.target.value)}
+                      className="w-full bg-white border border-gray-100 rounded-xl px-4 py-2.5 text-[13px] font-bold text-gray-800 focus:ring-2 focus:ring-blue-100 focus:border-blue-200 outline-none transition-all shadow-sm"
+                    >
+                      {['All', 'Whatsapp', 'Email', 'Telegram', 'Phone', 'Other'].map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Temperature</label>
+                    <select
+                      value={filterTemp}
+                      onChange={(e) => setFilterTemp(e.target.value)}
+                      className="w-full bg-white border border-gray-100 rounded-xl px-4 py-2.5 text-[13px] font-bold text-gray-800 focus:ring-2 focus:ring-blue-100 focus:border-blue-200 outline-none transition-all shadow-sm"
+                    >
+                      {['All', 'Hot', 'Warm', 'Neutral', 'Cold'].map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

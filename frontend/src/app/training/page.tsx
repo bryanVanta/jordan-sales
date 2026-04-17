@@ -1,16 +1,18 @@
+
 "use client";
 
 import React, { Suspense, useEffect, useRef, useState } from 'react';
+import ReactDOM from 'react-dom';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { 
-  ChevronDown, 
-  Upload, 
-  Search, 
-  Clock, 
-  Terminal, 
-  Database, 
-  Briefcase, 
-  Zap, 
+import {
+  ChevronDown,
+  Upload,
+  Search,
+  Clock,
+  Terminal,
+  Database,
+  Briefcase,
+  Zap,
   BrainCircuit,
   Settings,
   ShieldCheck,
@@ -27,6 +29,75 @@ type AppleToggleProps = {
 };
 
 const SELECTED_PROJECT_STORAGE_KEY = 'jordan:selectedProjectId';
+
+function TrainingFooterPortal({ handleSaveChanges, handleFindLeads, saveState, findLeadsState, statusMessage, findLeadsProgress }: any) {
+  const [isMounted, setIsMounted] = useState(false);
+
+  useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  if (!isMounted) return null;
+
+  const leadsButtonsEl = document.getElementById('leads-buttons');
+  const outreachButtonEl = document.getElementById('outreach-button');
+  const percentage = findLeadsProgress ? Math.round((findLeadsProgress.current / findLeadsProgress.total) * 100) : 0;
+
+  return (
+    <>
+      {leadsButtonsEl && ReactDOM.createPortal(
+        <button
+          onClick={handleSaveChanges}
+          disabled={saveState === 'saving'}
+          className="flex items-center justify-center gap-2 bg-gray-900 border border-white/10 text-white px-6 sm:px-8 py-3 sm:py-4 rounded-[22px] font-black text-[11px] sm:text-[12px] tracking-[0.1em] shadow-2xl hover:bg-black transition-all transform hover:-translate-y-1 uppercase w-full sm:w-auto disabled:opacity-60 disabled:transform-none"
+        >
+          <Save size={16} className="text-blue-500" /> Save Changes
+        </button>,
+        leadsButtonsEl
+      )}
+      {outreachButtonEl && ReactDOM.createPortal(
+        <div className="flex flex-col items-center gap-2">
+          <div className="relative w-full sm:w-auto">
+            <button
+              onClick={handleFindLeads}
+              disabled={findLeadsState === 'loading'}
+              className="flex items-center justify-center gap-3 bg-blue-600 text-white px-6 sm:px-10 py-3 sm:py-4 rounded-[22px] font-black text-[11px] sm:text-[12px] tracking-[0.2em] shadow-[0_15px_40px_rgba(37,99,235,0.4)] hover:bg-black hover:-translate-y-1 transition-all active:scale-95 uppercase group border border-white/10 disabled:opacity-60 disabled:transform-none relative overflow-hidden"
+            >
+              {findLeadsState === 'loading' && (
+                <>
+                  <div
+                    className="absolute inset-0 bg-gradient-to-r from-blue-700 via-blue-600 to-blue-500 transition-all duration-300"
+                    style={{ width: `${percentage}%` }}
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <span className="text-white font-black text-[10px] sm:text-[11px]">
+                      {findLeadsProgress ? `${percentage}%` : ''}
+                    </span>
+                  </div>
+                </>
+              )}
+              <span className="relative z-10 flex items-center gap-3">
+                <Search size={18} className="group-hover:rotate-12 transition-transform" />
+                {findLeadsState === 'loading'
+                  ? findLeadsProgress
+                    ? `${findLeadsProgress.current} / ${findLeadsProgress.total}`
+                    : 'Processing...'
+                  : 'Find Leads'}
+                {findLeadsState !== 'loading' && <ChevronRight size={16} className="ml-1 opacity-50 group-hover:translate-x-1 transition-transform" />}
+              </span>
+            </button>
+          </div>
+          {statusMessage ? (
+            <span className="inline-flex rounded-full bg-white/90 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-gray-700 shadow-lg">
+              {statusMessage}
+            </span>
+          ) : null}
+        </div>,
+        outreachButtonEl
+      )}
+    </>
+  );
+}
 
 const AppleToggle = ({ enabled, setEnabled, label }: AppleToggleProps) => (
   <div className="flex items-center justify-between group cursor-pointer" onClick={() => setEnabled(!enabled)}>
@@ -143,6 +214,7 @@ function TrainingPageInner() {
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [findLeadsState, setFindLeadsState] = useState<'idle' | 'loading' | 'error'>('idle');
   const [statusMessage, setStatusMessage] = useState('');
+  const [findLeadsProgress, setFindLeadsProgress] = useState<{ current: number; total: number } | null>(null);
 
   const toneOptions = ['Default', 'Professional', 'Casual', 'Enthusiastic', 'Precise', 'Witty', 'Aggressive'];
   const productTypeOptions = ['Service', 'Product', 'Software', 'Consulting', 'Agency', 'Other'];
@@ -363,6 +435,7 @@ function TrainingPageInner() {
   const handleFindLeads = async () => {
     setFindLeadsState('loading');
     setStatusMessage('');
+    setFindLeadsProgress(null);
 
     try {
       const effectiveId = await ensureProjectId();
@@ -378,8 +451,18 @@ function TrainingPageInner() {
 
       const result = await response.json();
       const leadCount = result.data?.count || 0;
-      setStatusMessage(`Found ${leadCount} lead${leadCount === 1 ? '' : 's'}. Redirecting to leads...`);
-      router.push('/leads');
+
+      // Show progress bar once we have results
+      if (leadCount > 0) {
+        setFindLeadsProgress({ current: leadCount, total: leadCount });
+      }
+
+      setStatusMessage(`Found ${leadCount} lead${leadCount === 1 ? '' : 's'}. Redirecting...`);
+
+      setTimeout(() => {
+        setFindLeadsState('idle');
+        router.push('/leads');
+      }, 1500);
     } catch (error) {
       console.error(error);
       setFindLeadsState('error');
@@ -388,7 +471,7 @@ function TrainingPageInner() {
   };
 
   return (
-    <div className="flex flex-col min-h-full px-4 sm:px-8 lg:px-12 relative overflow-hidden pb-40 lg:pb-32">
+    <div className="flex flex-col min-h-full px-4 sm:px-8 lg:px-12 pt-2 relative overflow-hidden">
       <input
         type="file"
         ref={fileInputRef}
@@ -551,35 +634,14 @@ function TrainingPageInner() {
       </div>
 
       {/* FIXED FOOTER BUTTONS */}
-      <div className="fixed bottom-24 lg:bottom-[40px] left-0 right-0 px-4 sm:px-10 lg:px-20 pointer-events-none z-50">
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between w-full max-w-[1600px] mx-auto pointer-events-auto gap-3">
-          <div className="flex items-center justify-center">
-            <button
-              onClick={handleSaveChanges}
-              disabled={saveState === 'saving'}
-              className="flex items-center justify-center gap-2 bg-gray-900 border border-white/10 text-white px-6 sm:px-8 py-3 sm:py-4 rounded-[22px] font-black text-[11px] sm:text-[12px] tracking-[0.1em] shadow-2xl hover:bg-black transition-all transform hover:-translate-y-1 uppercase w-full sm:w-auto disabled:opacity-60 disabled:transform-none"
-            >
-              <Save size={16} className="text-blue-500" /> Save Changes
-            </button>
-          </div>
-          <button
-            onClick={handleFindLeads}
-            disabled={findLeadsState === 'loading'}
-            className="flex items-center justify-center gap-3 bg-blue-600 text-white px-6 sm:px-10 py-3 sm:py-4 rounded-[22px] font-black text-[11px] sm:text-[12px] tracking-[0.2em] shadow-[0_15px_40px_rgba(37,99,235,0.4)] hover:bg-black hover:-translate-y-1 transition-all active:scale-95 uppercase group border border-white/10 disabled:opacity-60 disabled:transform-none"
-          >
-            <Search size={18} className="group-hover:rotate-12 transition-transform" /> 
-            {findLeadsState === 'loading' ? 'Finding Leads...' : 'Find Leads'}
-            <ChevronRight size={16} className="ml-1 opacity-50 group-hover:translate-x-1 transition-transform" />
-          </button>
-        </div>
-        {statusMessage ? (
-          <div className="mt-3 text-center">
-            <span className="inline-flex rounded-full bg-white/90 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-gray-700 shadow-lg">
-              {statusMessage}
-            </span>
-          </div>
-        ) : null}
-      </div>
+      <TrainingFooterPortal
+        handleSaveChanges={handleSaveChanges}
+        handleFindLeads={handleFindLeads}
+        saveState={saveState}
+        findLeadsState={findLeadsState}
+        statusMessage={statusMessage}
+        findLeadsProgress={findLeadsProgress}
+      />
 
       <style jsx global>{`
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
@@ -598,3 +660,4 @@ export default function TrainingPage() {
     </Suspense>
   );
 }
+

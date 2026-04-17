@@ -145,7 +145,16 @@ function LeadsPageInner() {
         whatsapp: lead.whatsapp || '',
         contactType: lead.contactType || '',
         location: lead.location || '',
-        temp: lead.temp || lead.leadTemperature || 'Neutral',
+        temp: (() => {
+          const sentiment = String(lead.sentiment || lead.temperature || '').trim().toLowerCase();
+          if (sentiment === 'hot') return 'Hot';
+          if (sentiment === 'warm') return 'Warm';
+          if (sentiment === 'cold') return 'Cold';
+          if (sentiment === 'neutral') return 'Neutral';
+
+          const fallback = String(lead.temp || lead.leadTemperature || '').trim();
+          return fallback || 'Neutral';
+        })(),
         last: lead.status || 'new',
         intent: lead.intent || '',
         next: lead.next || lead.nextAction || 'Follow Up',

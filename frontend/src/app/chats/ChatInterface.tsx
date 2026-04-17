@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { fetchCompleteConversationByLeadId, formatTime } from "@/services/outreach";
 import { db } from "@/lib/firebase";
-import { addDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
+import { addDoc, collection, onSnapshot } from "firebase/firestore";
 
 const API_BASE_URL = `/api`; // Use Next.js API routes (works on Vercel)
 
@@ -36,6 +36,58 @@ interface Message {
   time: string;
   timestampMs?: number; // For sentiment + accurate ordering
 }
+
+const normalizeSentiment = (value: any): 'hot' | 'warm' | 'neutral' | 'cold' | null => {
+  const v = String(value || '').trim().toLowerCase();
+  if (v === 'hot' || v === 'warm' || v === 'neutral' || v === 'cold') return v;
+  return null;
+};
+
+type StoredSentiment = 'hot' | 'warm' | 'neutral' | 'cold';
+
+const leadSentimentCache = new Map<string, { sentiment: StoredSentiment | null; fetchedAtMs: number }>();
+const leadSentimentInFlight = new Map<string, Promise<StoredSentiment | null>>();
+
+const getLeadSentiment = async (leadId: string): Promise<StoredSentiment | null> => {
+  const id = String(leadId || '').trim();
+  if (!id) return null;
+
+  const cached = leadSentimentCache.get(id);
+  const nowMs = Date.now();
+  if (cached && nowMs - cached.fetchedAtMs < 5 * 60 * 1000) return cached.sentiment;
+
+  const inFlight = leadSentimentInFlight.get(id);
+  if (inFlight) return inFlight;
+
+  const promise = (async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/leads/${encodeURIComponent(id)}`, { cache: 'no-store' });
+      if (!response.ok) {
+        leadSentimentCache.set(id, { sentiment: null, fetchedAtMs: nowMs });
+        return null;
+      }
+
+      const json: any = await response.json().catch(() => null);
+      const lead = json?.data || json?.lead || json?.result || null;
+      const sentiment =
+        normalizeSentiment(lead?.sentiment) ||
+        normalizeSentiment(lead?.temp) ||
+        normalizeSentiment(lead?.leadTemperature) ||
+        null;
+
+      leadSentimentCache.set(id, { sentiment, fetchedAtMs: Date.now() });
+      return sentiment;
+    } catch (error) {
+      leadSentimentCache.set(id, { sentiment: null, fetchedAtMs: nowMs });
+      return null;
+    } finally {
+      leadSentimentInFlight.delete(id);
+    }
+  })();
+
+  leadSentimentInFlight.set(id, promise);
+  return promise;
+};
 
 interface MediaItem {
   label: string;
@@ -311,7 +363,10 @@ const ChatInterface = () => {
                   .sort((a, b) => (a.timestampMs || 0) - (b.timestampMs || 0));
 
                 const mostRecentTime = messagesList.length > 0 ? messagesList[messagesList.length - 1].time : 'Just now';
-                const sentiment: 'hot' | 'warm' | 'neutral' | 'cold' = calculateSentiment(messagesList);
+
+                // Source of truth: backend lead sentiment/temp (same as Leads table). Fallback to local heuristic.
+                const storedSentiment = lead.firebaseLeadId ? await getLeadSentiment(lead.firebaseLeadId) : null;
+                const sentiment: 'hot' | 'warm' | 'neutral' | 'cold' = storedSentiment || calculateSentiment(messagesList);
 
                 return {
                   id: index + 1,

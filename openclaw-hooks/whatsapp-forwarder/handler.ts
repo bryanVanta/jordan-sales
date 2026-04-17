@@ -15,7 +15,7 @@ type OpenClawHookEvent = {
 
 declare const process: { env: Record<string, string | undefined> };
 
-const DEFAULT_SALESBOT_BACKEND_URL = 'http://192.168.100.92:5000';
+const DEFAULT_SALESBOT_BACKEND_URL = 'http://192.168.100.27:5000';
 
 const isWhatsAppChannel = (valueRaw: unknown) => {
   const value = String(valueRaw || '').toLowerCase();

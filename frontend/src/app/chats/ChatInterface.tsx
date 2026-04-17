@@ -794,7 +794,7 @@ const ChatInterface = () => {
           <div ref={messagesEndRef} />
         </div>
 
-        <div className="p-4 sm:p-6 pb-[100px] mt-auto border-t border-gray-50/50 bg-white/50">
+        <div className="p-4 sm:p-6 pb-20 sm:pb-16 mt-auto border-t border-gray-50/50 bg-white/50">
           <div className="bg-white border border-gray-100 rounded-[24px] p-2 sm:p-2.5 shadow-sm flex items-center gap-2 sm:gap-3 transition-all relative">
             <div className="relative">
               <button 
@@ -887,7 +887,7 @@ const ChatInterface = () => {
               </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar pb-32">
+            <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar pb-40">
               <div className="flex flex-col items-center mb-6 text-center">
                 <div className="relative mb-3">
                   <div className="w-24 h-24 bg-gray-100 rounded-full shadow-lg flex items-center justify-center font-black text-3xl text-gray-300">

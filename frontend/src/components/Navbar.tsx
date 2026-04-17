@@ -153,7 +153,7 @@ const NavbarContent = () => {
   };
 
   return (
-    <nav className="flex items-center justify-between px-8 py-5 w-full max-w-[1600px] mx-auto bg-transparent z-[100] relative">
+    <nav className="flex items-center justify-between px-8 py-3 w-full max-w-[1600px] mx-auto bg-transparent z-[100] relative">
       <div className="flex-1 flex items-center">
         <span className="text-xl font-bold tracking-tight text-white border-b-2 border-transparent pb-1">Jordan</span>
       </div>

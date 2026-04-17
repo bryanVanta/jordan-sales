@@ -45,7 +45,7 @@ const BottomNavContent = () => {
   ];
 
   return (
-    <div className="absolute bottom-6 left-1/2 transform -translate-x-1/2 z-50">
+    <div className="relative z-50">
       <div className="bg-[#0f0f0f]/90 backdrop-blur-md px-4 py-2.5 rounded-[40px] shadow-[0_20px_50px_rgba(0,0,0,0.4)] flex items-center gap-4 border border-white/5 transition-all duration-700 ease-in-out">
         
         {/* Dashboard Link */}

@@ -24,7 +24,7 @@ Forwards inbound WhatsApp messages received by the OpenClaw Gateway to the Sales
 
 ## Required env
 
-- `SALESBOT_BACKEND_URL` (example: `http://localhost:5000` or your deployed backend base URL)
+- `SALESBOT_BACKEND_URL` (example: `http://192.168.100.92:5000` or your deployed backend base URL; must be reachable from the machine/container running OpenClaw)
 
 ## Optional env
 

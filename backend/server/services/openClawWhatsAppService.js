@@ -4,8 +4,8 @@
  * Sends outbound WhatsApp messages by invoking OpenClaw on the gateway host over SSH.
  *
  * Implementation note:
- * - We use `openclaw gateway call agent ... --deliver --reply-channel whatsapp --reply-to <E164>`
- *   because `openclaw message send` doesn't accept `--url` and can be difficult to target remotely.
+ * - We use `openclaw message send --channel whatsapp --target <E164> --message <text> --json` so sends do not
+ *   depend on LLM models (and therefore never deliver model/auth failure messages to customers).
  */
 
 const { spawn } = require('child_process');
@@ -69,17 +69,19 @@ const parseJsonObject = (text = '') => {
 };
 
 const normalizeE164 = (input = '') => {
-  const value = String(input || '').trim();
-  if (!value) return '';
+  const raw = String(input || '').trim();
+  if (!raw) return '';
 
-  // already E.164
-  if (value.startsWith('+')) return value;
+  // Preserve group JIDs / WhatsApp JIDs when explicitly provided.
+  // Examples: "120363...@g.us", "6012345@s.whatsapp.net"
+  if (raw.includes('@')) return raw;
 
-  // remove non-digits
-  const digits = value.replace(/[^\d]/g, '');
+  const withoutPrefix = raw.toLowerCase().startsWith('whatsapp:') ? raw.slice('whatsapp:'.length) : raw;
+
+  // Force digits-only to avoid OpenClaw rejecting values like "+60 14 123 4567".
+  const digits = withoutPrefix.replace(/[^\d]/g, '');
   if (!digits) return '';
 
-  // naive default: assume it already includes country code if length >= 10
   return `+${digits}`;
 };
 
@@ -117,11 +119,16 @@ const extractProviderErrorFromOpenClawResponse = (parsed = {}) => {
 
 class OpenClawWhatsAppService {
   async sendMessage(to, message) {
+    const rawTo = String(to || '').trim();
     const target = normalizeE164(to);
     const trimmedMessage = String(message || '').trim();
 
     if (!target) {
-      return { success: false, error: 'Missing/invalid WhatsApp target number' };
+      return {
+        success: false,
+        error: 'Missing/invalid WhatsApp target number',
+        details: rawTo ? `Invalid target: ${rawTo}` : null,
+      };
     }
     if (!trimmedMessage) {
       return { success: false, error: 'Missing message body' };
@@ -131,12 +138,19 @@ class OpenClawWhatsAppService {
     const tokenArg = OPENCLAW_GATEWAY_TOKEN ? ` --token '${shellEscapeSingleQuoted(OPENCLAW_GATEWAY_TOKEN)}'` : '';
     const cli = shellEscapeSingleQuoted(getOpenClawCliForRuntime());
 
-    // Use gateway RPC so we can always pass --url/--token reliably.
+    // IMPORTANT: don't use `gateway call agent --deliver` for raw WhatsApp sends.
+    // If the agent/models fail, the gateway can still deliver an error message to the customer.
+    // Use the non-LLM send path instead: `openclaw message send ...`.
+    const accountArg = OPENCLAW_WHATSAPP_ACCOUNT
+      ? ` --account '${shellEscapeSingleQuoted(OPENCLAW_WHATSAPP_ACCOUNT)}'`
+      : '';
+    // Pass TARGET via a shell variable to avoid remote quoting edge-cases.
     const innerScript =
-      `PARAMS="$(cat)"; ` +
-      `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 '${cli}' gateway call agent --json --expect-final ` +
-      `--url '${shellEscapeSingleQuoted(remoteGatewayUrl)}' --params "$PARAMS"${tokenArg} --timeout ${OPENCLAW_RPC_TIMEOUT_MS}`;
-
+      `set -eu; ` +
+      `MESSAGE="$(cat)"; ` +
+      `TARGET='${shellEscapeSingleQuoted(target)}'; ` +
+      `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 '${cli}' message send --json --channel whatsapp ` +
+      `--target "$TARGET" --message "$MESSAGE"${accountArg}`;
     const remoteCommand = wrapInDockerExec(innerScript);
 
     return await new Promise((resolve) => {
@@ -202,23 +216,12 @@ class OpenClawWhatsAppService {
         resolve({ success: false, error: err.message });
       });
 
-      const strictPrompt =
-        `Reply with EXACTLY the following text and nothing else. Do not add quotes, emojis, or extra lines.\n\n` +
-        trimmedMessage;
+      // Keep these available as a break-glass fallback when debugging, but default to `message send`.
+      void remoteGatewayUrl;
+      void tokenArg;
+      void OPENCLAW_WHATSAPP_AGENT_ID;
 
-      const params = {
-        agentId: OPENCLAW_WHATSAPP_AGENT_ID,
-        idempotencyKey: `wa-send-${Date.now()}`,
-        message: strictPrompt,
-        to: target,
-        deliver: true,
-        replyChannel: 'whatsapp',
-        replyTo: target,
-        timeout: Math.ceil(OPENCLAW_RPC_TIMEOUT_MS / 1000),
-      };
-
-      if (OPENCLAW_WHATSAPP_ACCOUNT) params.replyAccount = OPENCLAW_WHATSAPP_ACCOUNT;
-      sshProcess.stdin.write(JSON.stringify(params));
+      sshProcess.stdin.write(trimmedMessage);
       sshProcess.stdin.end();
     });
   }

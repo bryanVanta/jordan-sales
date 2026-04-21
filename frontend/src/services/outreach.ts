@@ -57,6 +57,7 @@ export const fetchCompleteConversationByLeadId = async (
 ): Promise<OutreachMessage[]> => {
   try {
     const allMessages: OutreachMessage[] = [];
+    let hasInboundInOutreachHistory = false;
 
     // Outbound + any inbound mirrored into outreach_history
     try {
@@ -67,6 +68,10 @@ export const fetchCompleteConversationByLeadId = async (
       outreachSnapshot.forEach((doc) => {
         const data: any = doc.data();
         if (data.channel && data.channel !== channel) return;
+
+        if (data.channel === 'whatsapp' && data.status === 'received') {
+          hasInboundInOutreachHistory = true;
+        }
 
         allMessages.push({
           id: doc.id,
@@ -123,6 +128,14 @@ export const fetchCompleteConversationByLeadId = async (
     }
 
     if (channel === 'whatsapp') {
+      // The backend mirrors inbound WhatsApp into outreach_history for chat display.
+      // Only query inbound_whatsapp as a fallback for older records or partial deployments.
+      if (hasInboundInOutreachHistory) {
+        const dedupedMessages = dedupeConversationMessages(allMessages);
+        dedupedMessages.sort((a, b) => getMessageTimestamp(a) - getMessageTimestamp(b));
+        return dedupedMessages;
+      }
+
       try {
         const inboundRef = collection(db, 'inbound_whatsapp');
         const inboundQuery = query(inboundRef, where('leadId', '==', leadId));

@@ -188,7 +188,82 @@ const runSshCommand = ({ remoteCommand, stdinPayload }) =>
     sshProcess.stdin.end();
   });
 
+const isLocalhostGatewayUrl = (url = '') => {
+  const s = String(url || '').trim();
+  if (!s) return true; // no URL = treat as local
+  return /^(ws|http)s?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(s);
+};
+
 class OpenClawWhatsAppService {
+  // Try to send a WhatsApp message via the gateway HTTP REST API.
+  // Used in production where SSH to the gateway LAN IP is not reachable.
+  // Returns a result object or null if HTTP is not available/configured.
+  async sendMessageViaHttp(target, message) {
+    if (!OPENCLAW_GATEWAY_URL || isLocalhostGatewayUrl(OPENCLAW_GATEWAY_URL)) return null;
+    const token = OPENCLAW_GATEWAY_TOKEN;
+    if (!token) return null;
+
+    const httpBase = OPENCLAW_GATEWAY_URL.replace(/^ws(s?)/, 'http$1').replace(/\/$/, '');
+    const body = JSON.stringify({
+      target,
+      message,
+      ...(OPENCLAW_WHATSAPP_ACCOUNT ? { account: OPENCLAW_WHATSAPP_ACCOUNT } : {}),
+    });
+
+    // Endpoint candidates — try each until one returns non-404.
+    const endpoints = [
+      '/api/channels/whatsapp/send',
+      '/api/channels/whatsapp/message',
+      '/api/channels/whatsapp/messages',
+      '/api/messages/send',
+    ];
+    // Auth header candidates — try each until one returns non-401.
+    const authCandidates = [
+      { 'x-gateway-token': token },
+      { 'x-openclaw-token': token },
+      { 'Authorization': `Bearer ${token}` },
+      { 'X-OpenClaw-Token': token },
+      { 'X-Gateway-Token': token },
+    ];
+
+    for (const endpoint of endpoints) {
+      for (const extra of authCandidates) {
+        try {
+          const res = await fetch(`${httpBase}${endpoint}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...extra },
+            body,
+            signal: AbortSignal.timeout(30000),
+          });
+
+          if (res.status === 404) break; // wrong endpoint, try the next one
+
+          if (res.ok) {
+            const data = await res.json().catch(() => null);
+            console.log(`[OpenClaw] HTTP send succeeded via ${endpoint}`);
+            return {
+              success: true,
+              messageId: data?.messageId || data?.id || data?.data?.id || null,
+              raw: data,
+            };
+          }
+
+          if (res.status !== 401 && res.status !== 403) {
+            // Non-auth error — log and try next endpoint
+            const text = await res.text().catch(() => '');
+            console.warn(`[OpenClaw] HTTP send ${endpoint} returned ${res.status}:`, text.slice(0, 200));
+            break;
+          }
+        } catch (err) {
+          console.warn(`[OpenClaw] HTTP send ${endpoint} error:`, err?.message || err);
+        }
+      }
+    }
+
+    console.warn('[OpenClaw] HTTP send: all endpoint/auth combinations failed');
+    return null;
+  }
+
   // Send a composing (typing) presence update to the target so the customer
   // sees the "..." indicator on their WhatsApp before the reply arrives.
   // Tries multiple auth formats against the gateway HTTP API — whichever works.
@@ -290,6 +365,15 @@ class OpenClawWhatsAppService {
     }
     if (!trimmedMessage) {
       return { success: false, error: 'Missing message body' };
+    }
+
+    // When a public gateway URL is set (e.g. Cloudflare tunnel on Render), skip SSH entirely
+    // and use the HTTP REST API. SSH only works from the local LAN.
+    if (!isLocalhostGatewayUrl(OPENCLAW_GATEWAY_URL)) {
+      const httpResult = await this.sendMessageViaHttp(target, trimmedMessage);
+      if (httpResult) return httpResult;
+      // HTTP failed — log and fall through to SSH as last resort
+      console.warn('[OpenClaw] HTTP send failed; falling back to SSH');
     }
 
     const remoteGatewayUrl = OPENCLAW_GATEWAY_URL || 'ws://127.0.0.1:30080';

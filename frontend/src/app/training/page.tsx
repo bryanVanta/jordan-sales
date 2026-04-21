@@ -30,7 +30,7 @@ type AppleToggleProps = {
 
 const SELECTED_PROJECT_STORAGE_KEY = 'jordan:selectedProjectId';
 
-function TrainingFooterPortal({ handleSaveChanges, handleFindLeads, saveState, findLeadsState, statusMessage, findLeadsProgress }: any) {
+function TrainingFooterPortal({ handleSaveChanges, handleFindLeads, saveState, findLeadsState, findLeadsProgress }: any) {
   const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
@@ -56,42 +56,35 @@ function TrainingFooterPortal({ handleSaveChanges, handleFindLeads, saveState, f
         leadsButtonsEl
       )}
       {outreachButtonEl && ReactDOM.createPortal(
-        <div className="flex flex-col items-center gap-2">
-          <div className="relative w-full sm:w-auto">
-            <button
-              onClick={handleFindLeads}
-              disabled={findLeadsState === 'loading'}
-              className="flex items-center justify-center gap-3 bg-blue-600 text-white px-6 sm:px-10 py-3 sm:py-4 rounded-[22px] font-black text-[11px] sm:text-[12px] tracking-[0.2em] shadow-[0_15px_40px_rgba(37,99,235,0.4)] hover:bg-black hover:-translate-y-1 transition-all active:scale-95 uppercase group border border-white/10 disabled:opacity-60 disabled:transform-none relative overflow-hidden"
-            >
-              {findLeadsState === 'loading' && (
-                <>
-                  <div
-                    className="absolute inset-0 bg-gradient-to-r from-blue-700 via-blue-600 to-blue-500 transition-all duration-300"
-                    style={{ width: `${percentage}%` }}
-                  />
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <span className="text-white font-black text-[10px] sm:text-[11px]">
-                      {findLeadsProgress ? `${percentage}%` : ''}
-                    </span>
-                  </div>
-                </>
-              )}
-              <span className="relative z-10 flex items-center gap-3">
-                <Search size={18} className="group-hover:rotate-12 transition-transform" />
-                {findLeadsState === 'loading'
-                  ? findLeadsProgress
-                    ? `${findLeadsProgress.current} / ${findLeadsProgress.total}`
-                    : 'Processing...'
-                  : 'Find Leads'}
-                {findLeadsState !== 'loading' && <ChevronRight size={16} className="ml-1 opacity-50 group-hover:translate-x-1 transition-transform" />}
-              </span>
-            </button>
-          </div>
-          {statusMessage ? (
-            <span className="inline-flex rounded-full bg-white/90 px-4 py-2 text-[11px] font-black uppercase tracking-wider text-gray-700 shadow-lg">
-              {statusMessage}
+        <div className="relative w-full sm:w-auto">
+          <button
+            onClick={handleFindLeads}
+            disabled={findLeadsState === 'loading'}
+            className="flex items-center justify-center gap-3 bg-blue-600 text-white px-6 sm:px-10 py-3 sm:py-4 rounded-[22px] font-black text-[11px] sm:text-[12px] tracking-[0.2em] shadow-[0_15px_40px_rgba(37,99,235,0.4)] hover:bg-black hover:-translate-y-1 transition-all active:scale-95 uppercase group border border-white/10 disabled:opacity-60 disabled:transform-none relative overflow-hidden"
+          >
+            {findLeadsState === 'loading' && (
+              <>
+                <div
+                  className="absolute inset-0 bg-gradient-to-r from-blue-700 via-blue-600 to-blue-500 transition-all duration-300"
+                  style={{ width: `${percentage}%` }}
+                />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <span className="text-white font-black text-[10px] sm:text-[11px]">
+                    {findLeadsProgress ? `${percentage}%` : ''}
+                  </span>
+                </div>
+              </>
+            )}
+            <span className="relative z-10 flex items-center gap-3">
+              <Search size={18} className="group-hover:rotate-12 transition-transform" />
+              {findLeadsState === 'loading'
+                ? findLeadsProgress
+                  ? `${findLeadsProgress.current} / ${findLeadsProgress.total}`
+                  : 'Processing...'
+                : 'Find Leads'}
+              {findLeadsState !== 'loading' && <ChevronRight size={16} className="ml-1 opacity-50 group-hover:translate-x-1 transition-transform" />}
             </span>
-          ) : null}
+          </button>
         </div>,
         outreachButtonEl
       )}
@@ -439,32 +432,30 @@ function TrainingPageInner() {
 
     try {
       const effectiveId = await ensureProjectId();
-      const response = await fetch(`${API_BASE_URL}/scraping/find-leads?productInfoId=${encodeURIComponent(effectiveId)}`, {
+
+      // Mark scraping as in-progress so leads page can pick it up
+      try {
+        window.localStorage.setItem('jordan:scrapingInProgress', effectiveId);
+      } catch {}
+
+      // Navigate immediately — leads page will show progress while scraping runs
+      router.push(`/leads?productInfoId=${encodeURIComponent(effectiveId)}`);
+
+      // Fire scraping in background (no await)
+      fetch(`${API_BASE_URL}/scraping/find-leads?productInfoId=${encodeURIComponent(effectiveId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildProductInfoPayload()),
+      }).then(() => {
+        try { window.localStorage.removeItem('jordan:scrapingInProgress'); } catch {}
+      }).catch(() => {
+        try { window.localStorage.removeItem('jordan:scrapingInProgress'); } catch {}
       });
 
-      if (!response.ok) {
-        throw new Error('Lead discovery failed');
-      }
-
-      const result = await response.json();
-      const leadCount = result.data?.count || 0;
-
-      // Show progress bar once we have results
-      if (leadCount > 0) {
-        setFindLeadsProgress({ current: leadCount, total: leadCount });
-      }
-
-      setStatusMessage(`Found ${leadCount} lead${leadCount === 1 ? '' : 's'}. Redirecting...`);
-
-      setTimeout(() => {
-        setFindLeadsState('idle');
-        router.push('/leads');
-      }, 1500);
+      setFindLeadsState('idle');
     } catch (error) {
       console.error(error);
+      try { window.localStorage.removeItem('jordan:scrapingInProgress'); } catch {}
       setFindLeadsState('error');
       setStatusMessage('Could not find leads from the current Product & Services details.');
     }

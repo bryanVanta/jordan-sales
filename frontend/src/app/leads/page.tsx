@@ -85,6 +85,7 @@ function LeadsPageInner() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMoreLeads, setHasMoreLeads] = useState(false);
   const [progress, setProgress] = useState<any>({ status: 'idle' });
+  const [isScrapingActive, setIsScrapingActive] = useState(false);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const leadsRequestIdRef = useRef(0);
   const leadsAbortRef = useRef<AbortController | null>(null);
@@ -103,20 +104,29 @@ function LeadsPageInner() {
     }
   };
 
-  const startProgressTracking = () => {
-    // Ensure we never leak multiple intervals (causes status flicker)
+  const startProgressTracking = (projectId?: string) => {
     stopProgressTracking();
 
-    // Poll every 500ms during active search
     progressIntervalRef.current = setInterval(async () => {
       try {
-        const response = await fetch(`${API_BASE_URL}/progress/${encodeURIComponent(selectedProjectId || 'current')}`);
+        const id = projectId || selectedProjectId || 'current';
+        const response = await fetch(`${API_BASE_URL}/progress/${encodeURIComponent(id)}`);
         if (response.ok) {
           const progressData = await response.json();
           setProgress(progressData);
+
+          if (progressData.status === 'complete' || progressData.status === 'error') {
+            stopProgressTracking();
+            setIsScrapingActive(false);
+            try { window.localStorage.removeItem('jordan:scrapingInProgress'); } catch {}
+            // Reload leads now that scraping is done
+            if (progressData.status === 'complete') {
+              loadLeads(0, false);
+            }
+          }
         }
-      } catch (err) {
-        // Silent fail, not critical
+      } catch {
+        // Silent fail
       }
     }, 500);
   };
@@ -128,6 +138,17 @@ function LeadsPageInner() {
       try {
         window.localStorage.setItem(SELECTED_PROJECT_STORAGE_KEY, productInfoIdFromUrl);
       } catch {}
+
+      // Check if we just navigated here from "Find Leads" — start progress tracking immediately
+      try {
+        const scrapingId = window.localStorage.getItem('jordan:scrapingInProgress');
+        if (scrapingId === productInfoIdFromUrl) {
+          setIsScrapingActive(true);
+          setProgress({ status: 'loading', message: 'Starting search...' });
+          startProgressTracking(productInfoIdFromUrl);
+        }
+      } catch {}
+
       return;
     }
 
@@ -228,8 +249,14 @@ function LeadsPageInner() {
       if (requestId !== leadsRequestIdRef.current) return;
       setLoading(false);
       setLoadingMore(false);
-      stopProgressTracking();
-      setProgress({ status: 'idle' });
+      // Only clear progress if scraping is not actively running
+      setIsScrapingActive((active) => {
+        if (!active) {
+          stopProgressTracking();
+          setProgress({ status: 'idle' });
+        }
+        return active;
+      });
     }
   }, [selectedProjectId]);
 
@@ -531,42 +558,7 @@ function LeadsPageInner() {
         </div>
       </div>
 
-      {/* Progress Status Bar */}
-      {progress.status !== 'idle' && (
-        <div className={`mb-4 p-3 rounded-lg border flex items-center gap-3 z-10 ${
-          progress.status === 'error' 
-            ? 'bg-red-50 border-red-200' 
-            : progress.status === 'complete'
-            ? 'bg-green-50 border-green-200'
-            : 'bg-blue-50 border-blue-200'
-        }`}>
-          {progress.status !== 'complete' && progress.status !== 'error' && (
-            <Loader size={16} className={`${progress.status === 'searching' ? 'animate-spin text-blue-600' : 'animate-pulse text-amber-600'}`} />
-          )}
-          <div className="flex-1">
-            <p className={`text-[13px] font-bold ${
-              progress.status === 'error' 
-                ? 'text-red-700' 
-                : progress.status === 'complete'
-                ? 'text-green-700'
-                : 'text-blue-700'
-            }`}>
-              {progress.status === 'searching' && '🔍 Searching for leads...'}
-              {progress.status === 'enriching' && `📊 ${progress.message || 'Enriching leads...'}`}
-              {progress.status === 'loading' && '📚 Loading previous data...'}
-              {progress.status === 'complete' && `✅ Found ${progress.leadsFound || 0} leads`}
-              {progress.status === 'error' && `❌ ${progress.message || 'Error during search'}`}
-            </p>
-            {progress.progress && progress.total && (
-              <p className="text-[11px] text-gray-600 mt-1">
-                Progress: {progress.progress} / {progress.total}
-              </p>
-            )}
-          </div>
-        </div>
-      )}
-
-      <div className="flex-1 min-h-0 bg-white rounded-[24px] border border-gray-100 overflow-hidden flex flex-col z-10">
+      <div className={`flex-1 min-h-0 bg-white rounded-[24px] border border-gray-100 overflow-hidden flex flex-col z-10 relative transition-all duration-500 ${isScrapingActive && progress.status !== 'complete' ? 'pointer-events-none select-none' : ''}`}>
         {outreachError && (
           <div className="bg-red-50 border-b border-red-200 px-6 py-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
@@ -585,7 +577,92 @@ function LeadsPageInner() {
             <button onClick={() => setOutreachResults(null)} className="text-green-400 hover:text-green-600"><X size={16} /></button>
           </div>
         )}
-        <div ref={scrollContainerRef} className="overflow-x-auto overflow-y-auto flex-1 relative custom-scrollbar">
+        {/* Scraping overlay — centered over the table */}
+        {isScrapingActive && progress.status !== 'idle' && progress.status !== 'complete' && (
+          <div className="absolute inset-0 z-30 flex items-center justify-center backdrop-blur-[3px] bg-white/60 pointer-events-auto">
+            <div className="bg-white rounded-2xl shadow-2xl border border-gray-100 px-8 py-7 flex flex-col items-center gap-4 w-[320px]">
+              {/* Animated icon */}
+              <div className={`w-14 h-14 rounded-full flex items-center justify-center ${
+                progress.status === 'error' ? 'bg-red-100' : 'bg-blue-50'
+              }`}>
+                {progress.status === 'error'
+                  ? <span className="text-2xl">❌</span>
+                  : progress.status === 'searching'
+                  ? <span className="text-2xl animate-pulse">🔍</span>
+                  : <span className="text-2xl animate-bounce">📊</span>
+                }
+              </div>
+
+              {/* Title */}
+              <div className="text-center">
+                <p className="text-[15px] font-black text-gray-900 tracking-tight">
+                  {progress.status === 'loading' && 'Warming up...'}
+                  {progress.status === 'searching' && 'Hunting for leads'}
+                  {progress.status === 'enriching' && 'Enriching leads'}
+                  {progress.status === 'error' && 'Something went wrong'}
+                </p>
+                <p className="text-[11px] text-gray-400 mt-0.5 font-medium truncate max-w-[240px]">
+                  {progress.status === 'loading' && 'Loading previous searches...'}
+                  {progress.status === 'searching' && 'AI is scanning the web for you'}
+                  {progress.status === 'enriching' && (progress.message || 'Scraping contact info...')}
+                  {progress.status === 'error' && (progress.message || 'Please try again')}
+                </p>
+              </div>
+
+              {/* Progress bar + count */}
+              {progress.status !== 'error' && (
+                <div className="w-full flex flex-col gap-1.5">
+                  <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-blue-500 to-blue-400 transition-all duration-700"
+                      style={{
+                        width: progress.status === 'loading'
+                          ? '10%'
+                          : progress.status === 'searching'
+                          ? '30%'
+                          : progress.progress != null && progress.total
+                          ? `${Math.min(99, Math.round((progress.progress / progress.total) * 70) + 30)}%`
+                          : '35%'
+                      }}
+                    />
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">
+                      {progress.status === 'enriching'
+                        ? `${progress.progress ?? 0} / ${progress.total ?? '?'} scraped`
+                        : progress.status === 'searching'
+                        ? 'AI scanning...'
+                        : 'Starting...'}
+                    </span>
+                    <span className="text-[11px] font-black text-blue-600">
+                      {progress.status === 'loading'
+                        ? '10%'
+                        : progress.status === 'searching'
+                        ? '30%'
+                        : progress.progress != null && progress.total
+                        ? `${Math.min(99, Math.round((progress.progress / progress.total) * 70) + 30)}%`
+                        : '35%'}
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Terminate button */}
+              <button
+                onClick={async () => {
+                  try {
+                    await fetch(`${API_BASE_URL}/progress/${encodeURIComponent(selectedProjectId || 'current')}/terminate`, { method: 'POST' });
+                  } catch {}
+                }}
+                className="mt-1 w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl border border-red-200 bg-red-50 hover:bg-red-100 text-red-600 font-black text-[11px] uppercase tracking-widest transition-all hover:border-red-300 active:scale-95"
+              >
+                <X size={13} /> Stop Scraping
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div ref={scrollContainerRef} className={`overflow-x-auto overflow-y-auto flex-1 relative custom-scrollbar transition-all duration-500 ${isScrapingActive && progress.status !== 'complete' ? 'opacity-40 blur-[2px]' : ''}`}>
           {loading ? (
             <div className="flex h-full items-center justify-center px-8 py-16 text-center text-sm font-bold text-gray-500">
               Loading leads from Firebase...

@@ -24,7 +24,7 @@ const sentimentRouter = require('./routes/sentiment');
 const testRouter = require('./routes/test');
 const whatsappRouter = require('./routes/whatsapp');
 const { initializeSystem } = require('./services/initializationService');
-const { getProgress } = require('./services/progressService');
+const { getProgress, requestTerminate } = require('./services/progressService');
 const { initializeScheduledJobs } = require('./services/schedulerService');
 
 const app = express();
@@ -44,6 +44,13 @@ app.get('/api/progress/:productInfoId?', (req, res) => {
   const productInfoId = req.params.productInfoId || 'current';
   const progress = getProgress(productInfoId);
   res.json(progress);
+});
+
+// Terminate active scraping
+app.post('/api/progress/:productInfoId/terminate', (req, res) => {
+  const productInfoId = req.params.productInfoId || 'current';
+  requestTerminate(productInfoId);
+  res.json({ success: true, message: 'Termination requested' });
 });
 
 // API Routes

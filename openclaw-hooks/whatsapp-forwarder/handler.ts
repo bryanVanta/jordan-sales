@@ -184,6 +184,7 @@ const handler = async (event: OpenClawHookEvent) => {
       (event as any).context?.metadata?.id ||
       (event as any).messageId ||
       (event as any).id ||
+      pickMessageField(event.messages, ['messageId', 'id', 'msgId', 'sid', 'messageSid']) ||
       null;
 
     console.log('[whatsapp-forwarder] extracted', {

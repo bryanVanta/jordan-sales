@@ -589,8 +589,10 @@ const ChatInterface = () => {
         ),
       });
       
-      if (!response.ok) {
-        const details = await response.json().catch(() => null);
+      const details = await response.json().catch(() => null);
+      const sendSucceeded = response.ok && (details?.success ?? true) !== false;
+
+      if (!sendSucceeded) {
         console.error('Failed to send message', details);
         // Remove the message if sending failed
         setAllCustomers(prev => prev.map(c =>
@@ -599,7 +601,7 @@ const ChatInterface = () => {
             : c
         ));
       } else {
-        const result = await response.json().catch(() => ({} as any));
+        const result = details || ({} as any);
         console.log('Message sent successfully', result);
 
         if (!isWhatsApp) {

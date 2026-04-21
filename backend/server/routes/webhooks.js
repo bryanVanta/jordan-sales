@@ -191,12 +191,32 @@ router.post('/inbound-whatsapp', async (req, res) => {
           console.log(`[Webhook] Duplicate inbound WhatsApp ignored via messageId: ${messageId}`);
           return res.json({ success: true, duplicate: true, recordId: existingByMessageId.docs[0].id });
         }
+
+        // Some gateways generate different IDs across lifecycle events; apply recent-body dedupe too.
+        // IMPORTANT: Avoid composite-index requirements by querying recent docs by time only and filtering in-memory.
+        const recentSnapshot = await inboundRef.orderBy('createdAt', 'desc').limit(50).get();
+        const incomingBody = String(body).trim();
+        const duplicateRecent = recentSnapshot.docs.find((doc) => {
+          const data = doc.data();
+          if (String(data.contactWhatsApp || '') !== String(from)) return false;
+          const existingBody = String(data.content || '').trim();
+          const createdAt = data.createdAt?.toDate?.();
+          const ageMs = createdAt instanceof Date ? Math.abs(Date.now() - createdAt.getTime()) : Number.POSITIVE_INFINITY;
+          return existingBody === incomingBody && ageMs <= 2 * 60 * 1000;
+        });
+
+        if (duplicateRecent) {
+          console.log(`[Webhook] Duplicate inbound WhatsApp ignored via recent match: ${duplicateRecent.id}`);
+          return res.json({ success: true, duplicate: true, recordId: duplicateRecent.id });
+        }
       } else {
-        const recentSnapshot = await inboundRef.where('contactWhatsApp', '==', from).limit(10).get();
+        // IMPORTANT: Avoid composite-index requirements by querying recent docs by time only and filtering in-memory.
+        const recentSnapshot = await inboundRef.orderBy('createdAt', 'desc').limit(50).get();
 
         const incomingBody = String(body).trim();
         const duplicateRecent = recentSnapshot.docs.find((doc) => {
           const data = doc.data();
+          if (String(data.contactWhatsApp || '') !== String(from)) return false;
           const existingBody = String(data.content || '').trim();
           const createdAt = data.createdAt?.toDate?.();
           const ageMs = createdAt instanceof Date ? Math.abs(Date.now() - createdAt.getTime()) : Number.POSITIVE_INFINITY;
@@ -265,23 +285,48 @@ router.post('/inbound-whatsapp', async (req, res) => {
 
     console.log(`[Webhook] Inbound WhatsApp saved: ${inboundRecord.id} (leadId=${leadId || 'none'})`);
 
-    // Also add to outreach_history for chat display
-    await db.collection('outreach_history').add({
-      leadId: leadId || null,
-      company: leadData?.company || 'Unknown',
-      contactPerson: leadData?.person || leadData?.contactPerson || 'Unknown',
-      contactWhatsApp: from,
-      contactPhone: leadData?.phone || null,
-      channel: 'whatsapp',
-      messageSubject: null,
-      messageContent: String(body),
-      messagePreview: String(body).substring(0, 200),
-      status: 'received',
-      messageId,
-      type: 'inbound_reply',
-      timestamp,
-      createdAt: new Date(),
-    });
+    // Also add to outreach_history for chat display (best-effort dedupe).
+    try {
+      const outreachRef = db.collection('outreach_history');
+      const incomingBody = String(body).trim();
+      // IMPORTANT: Avoid composite-index requirements and undefined ordering by querying recent docs by time only.
+      const existingSnapshot = await outreachRef.orderBy('createdAt', 'desc').limit(75).get();
+      const duplicateMirror = existingSnapshot.docs.find((doc) => {
+        const data = doc.data() || {};
+        if (String(data.leadId || null) !== String(leadId || null)) return false;
+        if (String(data.channel || '') !== 'whatsapp') return false;
+        if (String(data.status || '') !== 'received') return false;
+        if (String(data.contactWhatsApp || '') !== String(from)) return false;
+        const existingBody = String(data.messageContent || '').trim();
+        const createdAt = data.createdAt?.toDate?.();
+        const ageMs = createdAt instanceof Date ? Math.abs(Date.now() - createdAt.getTime()) : Number.POSITIVE_INFINITY;
+        return existingBody === incomingBody && ageMs <= 2 * 60 * 1000;
+      });
+
+      if (duplicateMirror) {
+        console.log(`[Webhook] Duplicate inbound WhatsApp mirror ignored in outreach_history: ${duplicateMirror.id}`);
+      } else {
+        await outreachRef.add({
+          leadId: leadId || null,
+          company: leadData?.company || 'Unknown',
+          contactPerson: leadData?.person || leadData?.contactPerson || 'Unknown',
+          contactWhatsApp: from,
+          contactPhone: leadData?.phone || null,
+          channel: 'whatsapp',
+          messageSubject: null,
+          messageContent: String(body),
+          messagePreview: String(body).substring(0, 200),
+          status: 'received',
+          messageId,
+          type: 'inbound_reply',
+          source: payload.Body ? 'twilio' : 'openclaw',
+          timestamp,
+          createdAt: new Date(),
+        });
+      }
+    } catch (mirrorError) {
+      console.warn('[Webhook] Failed mirroring inbound WhatsApp into outreach_history:', mirrorError.message);
+    }
 
     if (leadId) {
       processInboundAutoReply({

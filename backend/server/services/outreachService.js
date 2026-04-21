@@ -176,6 +176,8 @@ async function saveOutreachRecord(lead, channel, messageContent, result) {
       errorMessage: result.error || null,
       errorDetails: result.details || null,
       messageId: result.messageId || null,
+      type: messageContent.type || null,
+      source: messageContent.source || null,
       timestamp: new Date(),
       createdAt: new Date(),
     };

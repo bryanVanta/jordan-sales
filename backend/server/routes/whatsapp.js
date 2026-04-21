@@ -33,6 +33,9 @@ router.post('/send', async (req, res) => {
     console.log(`[WhatsApp] Sending message to ${contactWhatsApp} for lead ${leadId}`);
 
     const sendResult = await whatsappService.sendMessage(contactWhatsApp, String(message));
+    if (!sendResult?.success) {
+      console.warn('[WhatsApp] Send failed:', sendResult?.error || 'Unknown error', sendResult?.details || '');
+    }
 
     // Save outreach record
     const record = {
@@ -69,14 +72,16 @@ router.post('/send', async (req, res) => {
       console.warn('[WhatsApp] Failed updating lead outreach fields:', updateError.message);
     }
 
-    res.json({
+    const responseBody = {
       success: sendResult.success,
       provider: record.source,
       messageId: sendResult.messageId || null,
       recordId: docRef.id,
       error: sendResult.success ? null : sendResult.error,
       details: sendResult.success ? null : sendResult.details || null,
-    });
+    };
+
+    res.status(sendResult.success ? 200 : 502).json(responseBody);
   } catch (error) {
     console.error('[WhatsApp] Error sending message:', error);
     res.status(500).json({ error: 'Failed to send WhatsApp message', details: error.message });

@@ -26,6 +26,26 @@ const normalizeSentiment = (value) => {
   return ['hot', 'warm', 'neutral', 'cold'].includes(sentiment) ? sentiment : 'neutral';
 };
 
+const normalizeTemperature = (value) => {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    // Heuristic mapping for legacy numeric temperature (0-100).
+    if (value >= 75) return 'hot';
+    if (value >= 55) return 'warm';
+    if (value >= 35) return 'neutral';
+    return 'cold';
+  }
+
+  const temp = String(value || '').trim().toLowerCase();
+  if (!temp) return '';
+  if (['hot', 'warm', 'neutral', 'cold'].includes(temp)) return temp;
+  // UI sometimes stores Temp as "Hot"/"Warm"/etc or emojis/short forms.
+  if (temp === 'h' || temp === '🔥') return 'hot';
+  if (temp === 'w') return 'warm';
+  if (temp === 'n') return 'neutral';
+  if (temp === 'c') return 'cold';
+  return '';
+};
+
 const shouldAutoReply = (sentiment) => {
   const normalized = normalizeSentiment(sentiment);
   return normalized === 'cold' || normalized === 'neutral';
@@ -164,25 +184,48 @@ async function processInboundAutoReply({
 }) {
   if (!leadId || !channel || !inboundMessage) return { skipped: true, reason: 'missing-required-data' };
 
-  const leadDoc = await db.collection('leads').doc(leadId).get();
-  if (!leadDoc.exists) return { skipped: true, reason: 'lead-not-found' };
-
-  const lead = { id: leadDoc.id, ...leadDoc.data() };
   const inboundFingerprint = buildInboundFingerprint({ channel, sender, inboundMessage, inboundMessageId });
 
-  if (isRecentDuplicateAutoReply(lead, inboundFingerprint)) {
-    return { skipped: true, reason: 'duplicate-inbound-autoreply' };
-  }
+  // Deduplicate + gate auto-replies with a transaction to avoid race conditions where the same inbound
+  // triggers multiple parallel replies (gateway hooks can emit duplicates).
+  const leadRef = db.collection('leads').doc(leadId);
+  const txnResult = await db.runTransaction(async (txn) => {
+    const leadDoc = await txn.get(leadRef);
+    if (!leadDoc.exists) return { skipped: true, reason: 'lead-not-found', lead: null };
 
-  const currentLeadSentiment = normalizeSentiment(lead.sentiment);
-  if (!shouldAutoReply(currentLeadSentiment)) {
-    await db.collection('leads').doc(leadId).update({
-      needsHumanReply: true,
-      lastInboundAt: new Date(),
-      lastInboundChannel: channel,
+    const lead = { id: leadDoc.id, ...leadDoc.data() };
+
+    if (isRecentDuplicateAutoReply(lead, inboundFingerprint)) {
+      return { skipped: true, reason: 'duplicate-inbound-autoreply', lead };
+    }
+
+    const currentLeadSentiment = normalizeSentiment(lead.sentiment);
+    const currentTemp = normalizeTemperature(lead.temp ?? lead.temperature ?? lead.temperatureScore ?? '');
+    const sentimentGate = currentTemp || currentLeadSentiment;
+
+    if (!shouldAutoReply(sentimentGate)) {
+      txn.update(leadRef, {
+        needsHumanReply: true,
+        lastInboundAt: new Date(),
+        lastInboundChannel: channel,
+        lastAutoReplySourceFingerprint: inboundFingerprint,
+        lastAutoReplySourceAt: new Date(),
+      });
+      return { skipped: true, reason: `human-handoff-existing-${sentimentGate}`, lead };
+    }
+
+    // Acquire lock early so concurrent webhook deliveries don't all reply.
+    txn.update(leadRef, {
+      lastAutoReplySourceFingerprint: inboundFingerprint,
+      lastAutoReplySourceAt: new Date(),
     });
-    return { skipped: true, reason: `human-handoff-existing-${currentLeadSentiment}` };
-  }
+
+    return { skipped: false, reason: null, lead };
+  });
+
+  if (txnResult?.skipped) return { skipped: true, reason: txnResult.reason };
+  const lead = txnResult?.lead;
+  if (!lead) return { skipped: true, reason: 'lead-not-found' };
 
   const sentiment = normalizeSentiment(await triggerSentimentAnalysis(leadId, sender || lead.email || lead.whatsapp || ''));
 
@@ -198,6 +241,9 @@ async function processInboundAutoReply({
   const conversation = await fetchRecentConversation(leadId);
   const replyBody = await generateAutoReplyMessage({ lead, channel, conversation, inboundMessage });
   if (!replyBody) return { skipped: true, reason: 'empty-reply' };
+  if (/all models failed/i.test(replyBody) || /^⚠️/i.test(replyBody)) {
+    return { skipped: true, reason: 'blocked-provider-error-text' };
+  }
 
   if (AUTO_REPLY_DELAY_MS > 0) {
     await wait(AUTO_REPLY_DELAY_MS);
@@ -215,6 +261,8 @@ async function processInboundAutoReply({
     {
       subject: channel === 'email' ? (inboundSubject ? `Re: ${inboundSubject}` : `Re: ${lead.company || 'Your inquiry'}`) : null,
       body: replyBody,
+      type: 'auto_reply',
+      source: 'autoReplyService',
     },
     sendResult
   );

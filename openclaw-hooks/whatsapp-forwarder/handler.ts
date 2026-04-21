@@ -15,8 +15,6 @@ type OpenClawHookEvent = {
 
 declare const process: { env: Record<string, string | undefined> };
 
-const DEFAULT_SALESBOT_BACKEND_URL = 'http://192.168.100.27:5000';
-
 const isWhatsAppChannel = (valueRaw: unknown) => {
   const value = String(valueRaw || '').toLowerCase();
   return value === 'whatsapp' || value.includes('whatsapp');
@@ -138,7 +136,7 @@ const handler = async (event: OpenClawHookEvent) => {
       return;
     }
 
-    const backendUrl = process.env.SALESBOT_BACKEND_URL || DEFAULT_SALESBOT_BACKEND_URL;
+    const backendUrl = String(process.env.SALESBOT_BACKEND_URL || '').trim();
     const token = process.env.SALESBOT_WEBHOOK_TOKEN;
     if (!backendUrl) {
       console.log('[whatsapp-forwarder] skip (missing backend url)');

@@ -8,7 +8,7 @@
  * 5. Extract email/phone from search results
  */
 
-const { updateProgress } = require('./progressService');
+const { updateProgress, isTerminateRequested, clearTerminate } = require('./progressService');
 
 
 const { chromium } = require('playwright');
@@ -533,18 +533,34 @@ async function findLeadsFromProductInfo(productInfo, offset = 0) {
 
     const discoveredLeads = [];
 
-    for (const candidate of filteredCandidates) {
-      try {
-        console.log(`[Pipeline] Enriching candidate #${discoveredLeads.length + 1}: "${candidate.companyName}"...`);
-        updateProgress(productId, 'enriching', { 
-          message: `Processing: ${candidate.companyName}`, 
-          stage: 'enrichment',
-          progress: discoveredLeads.length,
-          total: candidates.length
+    clearTerminate(productId);
+
+    for (let candidateIdx = 0; candidateIdx < filteredCandidates.length; candidateIdx++) {
+      const candidate = filteredCandidates[candidateIdx];
+
+      if (isTerminateRequested(productId)) {
+        console.log(`[Pipeline] Terminated by user at candidate #${candidateIdx + 1}`);
+        clearTerminate(productId);
+        updateProgress(productId, 'complete', {
+          message: `Stopped early — found ${discoveredLeads.length} lead${discoveredLeads.length === 1 ? '' : 's'}`,
+          leadsFound: discoveredLeads.length,
+          totalDiscovered: discoveredLeads.length,
+          terminated: true,
         });
-        
+        return discoveredLeads.slice(offset, offset + MAX_LEADS);
+      }
+
+      try {
+        console.log(`[Pipeline] Enriching candidate #${candidateIdx + 1}: "${candidate.companyName}"...`);
+        updateProgress(productId, 'enriching', {
+          message: `Processing: ${candidate.companyName}`,
+          stage: 'enrichment',
+          progress: candidateIdx + 1,
+          total: filteredCandidates.length,
+          leadsFound: discoveredLeads.length,
+        });
+
         // Keep going until we have enough leads to satisfy offset + MAX_LEADS
-        // This ensures pagination works: offset=0 returns 0-5, offset=5 returns 5-10, etc.
         if (discoveredLeads.length >= offset + MAX_LEADS) break;
 
         // Step 2: Enrich with Playwright to find contact info + always check for WhatsApp

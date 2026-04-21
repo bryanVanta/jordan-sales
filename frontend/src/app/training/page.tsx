@@ -432,32 +432,30 @@ function TrainingPageInner() {
 
     try {
       const effectiveId = await ensureProjectId();
-      const response = await fetch(`${API_BASE_URL}/scraping/find-leads?productInfoId=${encodeURIComponent(effectiveId)}`, {
+
+      // Mark scraping as in-progress so leads page can pick it up
+      try {
+        window.localStorage.setItem('jordan:scrapingInProgress', effectiveId);
+      } catch {}
+
+      // Navigate immediately — leads page will show progress while scraping runs
+      router.push(`/leads?productInfoId=${encodeURIComponent(effectiveId)}`);
+
+      // Fire scraping in background (no await)
+      fetch(`${API_BASE_URL}/scraping/find-leads?productInfoId=${encodeURIComponent(effectiveId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildProductInfoPayload()),
+      }).then(() => {
+        try { window.localStorage.removeItem('jordan:scrapingInProgress'); } catch {}
+      }).catch(() => {
+        try { window.localStorage.removeItem('jordan:scrapingInProgress'); } catch {}
       });
 
-      if (!response.ok) {
-        throw new Error('Lead discovery failed');
-      }
-
-      const result = await response.json();
-      const leadCount = result.data?.count || 0;
-
-      // Show progress bar once we have results
-      if (leadCount > 0) {
-        setFindLeadsProgress({ current: leadCount, total: leadCount });
-      }
-
-      setStatusMessage(`Found ${leadCount} lead${leadCount === 1 ? '' : 's'}. Redirecting...`);
-
-      setTimeout(() => {
-        setFindLeadsState('idle');
-        router.push('/leads');
-      }, 1500);
+      setFindLeadsState('idle');
     } catch (error) {
       console.error(error);
+      try { window.localStorage.removeItem('jordan:scrapingInProgress'); } catch {}
       setFindLeadsState('error');
       setStatusMessage('Could not find leads from the current Product & Services details.');
     }

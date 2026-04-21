@@ -259,6 +259,7 @@ const ChatInterface = () => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
+  const leadRealtimeStateRef = useRef(new Map<string, { manualReplyMode: boolean; aiTyping: boolean; sentiment?: any }>());
 
   const normalizeWhatsAppContact = (value: string) => {
     const trimmed = String(value || "").trim();
@@ -308,9 +309,16 @@ const ChatInterface = () => {
         // Invalidate API cache so next full rebuild gets fresh data.
         leadSentimentCache.delete(leadId);
 
+        // Persist latest lead flags even if the chat list isn't built yet.
+        leadRealtimeStateRef.current.set(String(leadId), {
+          manualReplyMode: updatedManualReplyMode,
+          aiTyping: updatedAiTyping,
+          sentiment: updatedSentiment,
+        });
+
         setAllCustomers((prev) =>
           prev.map((c) => {
-            if (c.firebaseLeadId !== leadId) return c;
+            if (String(c.firebaseLeadId || '').trim() !== String(leadId).trim()) return c;
             const newSentiment = updatedSentiment ?? c.sentiment ?? 'neutral';
             return {
               ...c,
@@ -486,7 +494,30 @@ const ChatInterface = () => {
         if (cancelled) return;
 
         console.log(`[Chat] Live rebuild produced ${leadsWithMessages.length} leads`, leadsWithMessages);
-        setAllCustomers(leadsWithMessages);
+        // Preserve per-lead UI state (manualReplyMode / aiTyping) that comes from the `leads` snapshot listener.
+        // The live rebuild is based on outreach/inbound collections and would otherwise reset these fields.
+        setAllCustomers((prev) => {
+          const prevByLeadId = new Map<string, any>();
+          prev.forEach((item) => {
+            const key = String(item?.firebaseLeadId || '').trim();
+            if (key) prevByLeadId.set(key, item);
+          });
+
+          return leadsWithMessages.map((lead) => {
+            const key = String((lead as any)?.firebaseLeadId || '').trim();
+            const previous = key ? prevByLeadId.get(key) : null;
+            const realtime = key ? leadRealtimeStateRef.current.get(key) : null;
+            return {
+              ...lead,
+              manualReplyMode:
+                previous?.manualReplyMode ??
+                realtime?.manualReplyMode ??
+                (lead as any)?.manualReplyMode ??
+                false,
+              aiTyping: previous?.aiTyping ?? realtime?.aiTyping ?? (lead as any)?.aiTyping ?? false,
+            };
+          });
+        });
         setLoadedCustomerIds(new Set(leadsWithMessages.map((lead) => lead.id)));
 
         setSelectedCustomerId((prev) => {

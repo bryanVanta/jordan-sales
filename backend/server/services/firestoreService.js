@@ -68,6 +68,8 @@ async function createLead(data) {
   try {
     const docRef = await db.collection('leads').add({
       ...data,
+      // When true, auto-reply is paused for this lead. Default is auto-reply enabled.
+      manualReplyMode: Boolean(data?.manualReplyMode) === true,
       status: 'new',
       createdAt: new Date(),
       updatedAt: new Date(),
@@ -131,11 +133,16 @@ async function getLeadsByCompany(companyId) {
 
 async function updateLead(id, data) {
   try {
+    const patch = { ...data };
+    if (Object.prototype.hasOwnProperty.call(patch, 'manualReplyMode')) {
+      patch.manualReplyMode = Boolean(patch.manualReplyMode);
+    }
+
     await db.collection('leads').doc(id).update({
-      ...data,
+      ...patch,
       updatedAt: new Date(),
     });
-    return { id, ...data };
+    return { id, ...patch };
   } catch (error) {
     console.error('Error updating lead:', error);
     throw error;

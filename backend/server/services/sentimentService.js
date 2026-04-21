@@ -4,7 +4,7 @@
  */
 
 const { db, admin } = require('../config/firebase');
-const { callOpenRouter } = require('./llmService');
+const { callLLM } = require('./llmService');
 
 /**
  * Analyze sentiment using AI
@@ -111,7 +111,7 @@ Do not include any other text or explanation.`;
       },
     ];
 
-    const response = await callOpenRouter(llm_messages, false); // Don't use reasoning for speed
+    const response = await callLLM(llm_messages, false); // Don't use reasoning for speed
     const sentiment = response.content.trim().toLowerCase();
 
     // Validate sentiment

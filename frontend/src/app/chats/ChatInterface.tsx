@@ -20,8 +20,7 @@ import {
   Navigation,
   CheckCheck,
   Loader2,
-  Heart,
-  Wind
+  Bot
 } from "lucide-react";
 import { fetchCompleteConversationByLeadId, formatTime } from "@/services/outreach";
 import { db } from "@/lib/firebase";
@@ -113,6 +112,10 @@ interface CustomerData {
   lastOutreachTime?: Date; // Track when we last sent a message
   lastResponseTime?: Date; // Track when customer last responded
   channel?: 'email' | 'whatsapp' | 'telegram'; // Channel/platform for this conversation
+  manualReplyMode?: boolean; // When true, auto-reply is paused for this lead
+  aiTyping?: boolean; // True while the AI is composing an auto-reply
+  whatsapp?: string; // WhatsApp phone number (E.164)
+  contactWhatsApp?: string; // Alternate WhatsApp field from Firestore
 }
 
 const CUSTOMERS: CustomerData[] = [
@@ -249,12 +252,14 @@ const ChatInterface = () => {
   const [loadedCustomerIds, setLoadedCustomerIds] = useState<Set<number>>(new Set());
   const [sentimentCounts, setSentimentCounts] = useState({ hot: 0, warm: 0, neutral: 0, cold: 0 });
   const [selectedChannel, setSelectedChannel] = useState<'email' | 'whatsapp' | 'telegram'>(platformFromUrl);
-  
+  const [togglingReplyMode, setTogglingReplyMode] = useState(false);
+
   const currentCustomer = allCustomers.find(c => c.id === selectedCustomerId) || allCustomers[0];
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
+  const leadRealtimeStateRef = useRef(new Map<string, { manualReplyMode: boolean; aiTyping: boolean; sentiment?: any }>());
 
   const normalizeWhatsAppContact = (value: string) => {
     const trimmed = String(value || "").trim();
@@ -283,6 +288,90 @@ const ChatInterface = () => {
   useEffect(() => {
     setSentimentCounts(getSentimentCountsFromCustomers(allCustomers));
   }, [allCustomers, selectedChannel]);
+
+  // Real-time listener on `leads` collection — updates sentiment icons and manualReplyMode
+  // without requiring a page refresh or waiting for the next outreach/inbound snapshot.
+  useEffect(() => {
+    const leadsRef = collection(db, 'leads');
+    const unsubscribe = onSnapshot(leadsRef, (snapshot) => {
+      snapshot.docChanges().forEach((change) => {
+        if (change.type !== 'modified' && change.type !== 'added') return;
+        const leadId = change.doc.id;
+        const data = change.doc.data();
+        const updatedSentiment = normalizeSentiment(data.sentiment ?? data.temp ?? data.leadTemperature);
+        const updatedManualReplyMode = Boolean(data.manualReplyMode);
+
+        // Guard against a stale aiTyping flag if the server crashed mid-reply (>2 min).
+        const typingStartedAt = data.aiTypingStartedAt?.toDate?.() ?? null;
+        const isStale = typingStartedAt && Date.now() - typingStartedAt.getTime() > 2 * 60 * 1000;
+        const updatedAiTyping = Boolean(data.aiTyping) && !isStale;
+
+        // Invalidate API cache so next full rebuild gets fresh data.
+        leadSentimentCache.delete(leadId);
+
+        // Persist latest lead flags even if the chat list isn't built yet.
+        leadRealtimeStateRef.current.set(String(leadId), {
+          manualReplyMode: updatedManualReplyMode,
+          aiTyping: updatedAiTyping,
+          sentiment: updatedSentiment,
+        });
+
+        setAllCustomers((prev) =>
+          prev.map((c) => {
+            if (String(c.firebaseLeadId || '').trim() !== String(leadId).trim()) return c;
+            const newSentiment = updatedSentiment ?? c.sentiment ?? 'neutral';
+            return {
+              ...c,
+              sentiment: newSentiment,
+              temperature: sentimentToTemperature(newSentiment),
+              manualReplyMode: updatedManualReplyMode,
+              aiTyping: updatedAiTyping,
+            };
+          })
+        );
+      });
+    }, (error) => {
+      console.error('[Chat] Leads real-time listener error:', error);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  // Toggle manual/auto reply mode for the current lead.
+  const handleToggleReplyMode = async () => {
+    if (!currentCustomer?.firebaseLeadId || togglingReplyMode) return;
+    const newMode = !currentCustomer.manualReplyMode;
+    setTogglingReplyMode(true);
+    try {
+      // Optimistically update UI.
+      setAllCustomers((prev) =>
+        prev.map((c) =>
+          c.firebaseLeadId === currentCustomer.firebaseLeadId
+            ? { ...c, manualReplyMode: newMode }
+            : c
+        )
+      );
+
+      const res = await fetch(`${API_BASE_URL}/leads/${encodeURIComponent(currentCustomer.firebaseLeadId)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manualReplyMode: newMode }),
+      });
+      if (!res.ok) throw new Error('Failed to update reply mode');
+    } catch (err) {
+      console.error('[Chat] Toggle reply mode failed:', err);
+      // Revert on failure.
+      setAllCustomers((prev) =>
+        prev.map((c) =>
+          c.firebaseLeadId === currentCustomer.firebaseLeadId
+            ? { ...c, manualReplyMode: !newMode }
+            : c
+        )
+      );
+    } finally {
+      setTogglingReplyMode(false);
+    }
+  };
 
   // Keep the sidebar and active conversation live as Firestore changes.
   useEffect(() => {
@@ -342,7 +431,7 @@ const ChatInterface = () => {
             .filter((lead) => Boolean(lead.firebaseLeadId))
             .map(async (lead, index) => {
               try {
-                const conversationMessages = await fetchCompleteConversationByLeadId(lead.firebaseLeadId, selectedChannel);
+                const conversationMessages = await fetchCompleteConversationByLeadId(lead.firebaseLeadId, selectedChannel, selectedChannel === 'whatsapp' ? lead.email || undefined : undefined);
 
                 const messagesList: Message[] = conversationMessages
                   .map((msg: any) => {
@@ -405,7 +494,30 @@ const ChatInterface = () => {
         if (cancelled) return;
 
         console.log(`[Chat] Live rebuild produced ${leadsWithMessages.length} leads`, leadsWithMessages);
-        setAllCustomers(leadsWithMessages);
+        // Preserve per-lead UI state (manualReplyMode / aiTyping) that comes from the `leads` snapshot listener.
+        // The live rebuild is based on outreach/inbound collections and would otherwise reset these fields.
+        setAllCustomers((prev) => {
+          const prevByLeadId = new Map<string, any>();
+          prev.forEach((item) => {
+            const key = String(item?.firebaseLeadId || '').trim();
+            if (key) prevByLeadId.set(key, item);
+          });
+
+          return leadsWithMessages.map((lead) => {
+            const key = String((lead as any)?.firebaseLeadId || '').trim();
+            const previous = key ? prevByLeadId.get(key) : null;
+            const realtime = key ? leadRealtimeStateRef.current.get(key) : null;
+            return {
+              ...lead,
+              manualReplyMode:
+                previous?.manualReplyMode ??
+                realtime?.manualReplyMode ??
+                (lead as any)?.manualReplyMode ??
+                false,
+              aiTyping: previous?.aiTyping ?? realtime?.aiTyping ?? (lead as any)?.aiTyping ?? false,
+            };
+          });
+        });
         setLoadedCustomerIds(new Set(leadsWithMessages.map((lead) => lead.id)));
 
         setSelectedCustomerId((prev) => {
@@ -491,7 +603,7 @@ const ChatInterface = () => {
         }
 
         // Fetch using lead id - gets both sent (outreach) and received (inbound) messages
-        const conversationMessages = await fetchCompleteConversationByLeadId(currentCustomer.firebaseLeadId, selectedChannel);
+        const conversationMessages = await fetchCompleteConversationByLeadId(currentCustomer.firebaseLeadId, selectedChannel, selectedChannel === 'whatsapp' ? currentCustomer.email || undefined : undefined);
         
         if (conversationMessages && conversationMessages.length > 0) {
           // Convert messages to chat Message format
@@ -532,7 +644,7 @@ const ChatInterface = () => {
     if (currentCustomer?.email) {
       loadOutreachMessages();
     }
-  }, [selectedCustomerId, currentCustomer?.email, loadedCustomerIds]);
+  }, [selectedCustomerId, currentCustomer?.email, currentCustomer?.firebaseLeadId, selectedChannel, loadedCustomerIds]);
 
   useEffect(() => {
     setShowPlusMenu(false);
@@ -793,6 +905,19 @@ const ChatInterface = () => {
               </div>
             </div>
           ))}
+          {/* AI typing indicator — shown while auto-reply is being generated */}
+          {false && currentCustomer?.aiTyping && (
+            <div className="flex justify-end animate-in fade-in slide-in-from-bottom-2">
+              <div className="flex flex-col items-end max-w-[75%]">
+                <div className="px-4 py-3 rounded-2xl rounded-tr-none bg-blue-600 shadow-sm flex items-center gap-1.5">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white/70 animate-bounce" style={{ animationDelay: '0ms' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-white/70 animate-bounce" style={{ animationDelay: '150ms' }} />
+                  <span className="w-1.5 h-1.5 rounded-full bg-white/70 animate-bounce" style={{ animationDelay: '300ms' }} />
+                </div>
+                <span className="text-[9px] font-bold text-gray-400 mt-1 px-1 opacity-50">AI is typing…</span>
+              </div>
+            </div>
+          )}
           <div ref={messagesEndRef} />
         </div>
 
@@ -967,6 +1092,41 @@ const ChatInterface = () => {
                    </div>
                  ))}
               </div>
+
+              {/* Auto Reply Toggle — only for warm or hot leads */}
+              {(currentCustomer.sentiment === 'warm' || currentCustomer.sentiment === 'hot') && (
+                <div className="mt-6 pt-5 border-t border-gray-100">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Bot size={14} className="text-gray-400" />
+                      <div>
+                        <p className="text-[12px] font-black text-gray-800">Auto Reply</p>
+                        <p className="text-[9px] font-bold text-gray-400">
+                          {currentCustomer.manualReplyMode ? 'AI replies paused' : 'AI replies automatically'}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      onClick={handleToggleReplyMode}
+                      disabled={togglingReplyMode}
+                      className="relative disabled:opacity-50 transition-opacity"
+                      aria-label="Toggle auto reply"
+                    >
+                      {togglingReplyMode ? (
+                        <Loader2 size={16} className="animate-spin text-gray-400" />
+                      ) : (
+                        <div className={`w-11 h-6 rounded-full transition-colors duration-300 ${
+                          currentCustomer.manualReplyMode ? 'bg-gray-200' : 'bg-blue-500'
+                        }`}>
+                          <div className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow-sm transition-transform duration-300 ${
+                            currentCustomer.manualReplyMode ? 'translate-x-0.5' : 'translate-x-[22px]'
+                          }`} />
+                        </div>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>

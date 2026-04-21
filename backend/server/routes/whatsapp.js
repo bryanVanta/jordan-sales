@@ -11,8 +11,9 @@ const whatsappService = require('../services/whatsappService');
 router.post('/send', async (req, res) => {
   try {
     const { leadId, company, message, whatsapp } = req.body || {};
+    const messageText = typeof message === 'string' ? message : String(message ?? '');
 
-    if (!leadId || !message) {
+    if (!leadId || !messageText.trim()) {
       return res.status(400).json({ error: 'Missing required fields: leadId, message' });
     }
 
@@ -32,7 +33,7 @@ router.post('/send', async (req, res) => {
 
     console.log(`[WhatsApp] Sending message to ${contactWhatsApp} for lead ${leadId}`);
 
-    const sendResult = await whatsappService.sendMessage(contactWhatsApp, String(message));
+    const sendResult = await whatsappService.sendMessage(contactWhatsApp, messageText);
     if (!sendResult?.success) {
       console.warn('[WhatsApp] Send failed:', sendResult?.error || 'Unknown error', sendResult?.details || '');
     }
@@ -47,8 +48,8 @@ router.post('/send', async (req, res) => {
       contactWhatsApp: contactWhatsApp || null,
       channel: 'whatsapp',
       messageSubject: null,
-      messageContent: String(message),
-      messagePreview: String(message).substring(0, 200),
+      messageContent: messageText,
+      messagePreview: messageText.substring(0, 200),
       status: sendResult.success ? 'sent' : 'failed',
       errorMessage: sendResult.error || null,
       errorDetails: sendResult.details || null,

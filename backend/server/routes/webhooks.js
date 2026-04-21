@@ -184,12 +184,40 @@ router.post('/inbound-whatsapp', async (req, res) => {
     // OpenClaw can emit multiple lifecycle events for the same inbound message.
     // Treat dedupe as best-effort so lookup issues never block storing the inbound.
     const inboundRef = db.collection('inbound_whatsapp');
+
+    const triggerAutoReplyBestEffort = ({ leadId, bodyText, senderNumber, messageIdValue }) => {
+      if (!leadId) return;
+
+      processInboundAutoReply({
+        leadId: String(leadId),
+        channel: 'whatsapp',
+        inboundMessage: String(bodyText || ''),
+        sender: String(senderNumber || ''),
+        inboundMessageId: messageIdValue ? String(messageIdValue) : '',
+      })
+        .then((result) => {
+          if (result?.skipped) {
+            console.log(`[Webhook] WhatsApp auto-reply skipped for lead ${leadId}: ${result.reason}`);
+          } else {
+            console.log(`[Webhook] WhatsApp auto-reply sent for lead ${leadId}`);
+          }
+        })
+        .catch((err) => console.error(`[Webhook] Error running WhatsApp auto-reply:`, err.message));
+    };
     try {
       if (messageId) {
         const existingByMessageId = await inboundRef.where('messageId', '==', messageId).limit(1).get();
         if (!existingByMessageId.empty) {
           console.log(`[Webhook] Duplicate inbound WhatsApp ignored via messageId: ${messageId}`);
-          return res.json({ success: true, duplicate: true, recordId: existingByMessageId.docs[0].id });
+          const existingDoc = existingByMessageId.docs[0];
+          const existingData = existingDoc.data() || {};
+          triggerAutoReplyBestEffort({
+            leadId: existingData.leadId,
+            bodyText: existingData.content || body,
+            senderNumber: existingData.contactWhatsApp || from,
+            messageIdValue: messageId,
+          });
+          return res.json({ success: true, duplicate: true, recordId: existingDoc.id });
         }
 
         // Some gateways generate different IDs across lifecycle events; apply recent-body dedupe too.
@@ -207,6 +235,13 @@ router.post('/inbound-whatsapp', async (req, res) => {
 
         if (duplicateRecent) {
           console.log(`[Webhook] Duplicate inbound WhatsApp ignored via recent match: ${duplicateRecent.id}`);
+          const existingData = duplicateRecent.data() || {};
+          triggerAutoReplyBestEffort({
+            leadId: existingData.leadId,
+            bodyText: existingData.content || body,
+            senderNumber: existingData.contactWhatsApp || from,
+            messageIdValue: messageId,
+          });
           return res.json({ success: true, duplicate: true, recordId: duplicateRecent.id });
         }
       } else {
@@ -225,6 +260,13 @@ router.post('/inbound-whatsapp', async (req, res) => {
 
         if (duplicateRecent) {
           console.log(`[Webhook] Duplicate inbound WhatsApp ignored via recent match: ${duplicateRecent.id}`);
+          const existingData = duplicateRecent.data() || {};
+          triggerAutoReplyBestEffort({
+            leadId: existingData.leadId,
+            bodyText: existingData.content || body,
+            senderNumber: existingData.contactWhatsApp || from,
+            messageIdValue: messageId,
+          });
           return res.json({ success: true, duplicate: true, recordId: duplicateRecent.id });
         }
       }
@@ -329,6 +371,10 @@ router.post('/inbound-whatsapp', async (req, res) => {
     }
 
     if (leadId) {
+      // Signal to the chat UI that the AI is composing a reply.
+      db.collection('leads').doc(leadId).update({ aiTyping: true, aiTypingStartedAt: new Date() })
+        .catch(() => {}); // best-effort, never block the webhook response
+
       processInboundAutoReply({
         leadId,
         channel: 'whatsapp',
@@ -343,7 +389,10 @@ router.post('/inbound-whatsapp', async (req, res) => {
             console.log(`[Webhook] WhatsApp auto-reply sent for lead ${leadId}`);
           }
         })
-        .catch((err) => console.error(`[Webhook] Error running WhatsApp auto-reply:`, err.message));
+        .catch((err) => console.error(`[Webhook] Error running WhatsApp auto-reply:`, err.message))
+        .finally(() => {
+          db.collection('leads').doc(leadId).update({ aiTyping: false }).catch(() => {});
+        });
     }
 
     res.json({ success: true, recordId: inboundRecord.id });

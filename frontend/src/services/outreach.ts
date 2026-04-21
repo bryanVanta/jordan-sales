@@ -53,7 +53,8 @@ const dedupeConversationMessages = (messages: OutreachMessage[]): OutreachMessag
  */
 export const fetchCompleteConversationByLeadId = async (
   leadId: string,
-  channel: PlatformType
+  channel: PlatformType,
+  contactWhatsApp?: string  // Optional: also query by phone number so messages with leadId:null are found
 ): Promise<OutreachMessage[]> => {
   try {
     const allMessages: OutreachMessage[] = [];
@@ -128,23 +129,71 @@ export const fetchCompleteConversationByLeadId = async (
     }
 
     if (channel === 'whatsapp') {
-      // The backend mirrors inbound WhatsApp into outreach_history for chat display.
-      // Only query inbound_whatsapp as a fallback for older records or partial deployments.
-      if (hasInboundInOutreachHistory) {
-        const dedupedMessages = dedupeConversationMessages(allMessages);
-        dedupedMessages.sort((a, b) => getMessageTimestamp(a) - getMessageTimestamp(b));
-        return dedupedMessages;
+      // Also query outreach_history by contactWhatsApp to catch messages where leadId may differ
+      if (contactWhatsApp) {
+        try {
+          const outreachRef = collection(db, 'outreach_history');
+          const phoneQuery = query(outreachRef, where('contactWhatsApp', '==', contactWhatsApp));
+          const phoneSnapshot = await getDocs(phoneQuery);
+          phoneSnapshot.forEach((doc) => {
+            const data: any = doc.data();
+            if (data.channel && data.channel !== 'whatsapp') return;
+            if (data.channel === 'whatsapp' && data.status === 'received') {
+              hasInboundInOutreachHistory = true;
+            }
+            allMessages.push({
+              id: doc.id,
+              leadId: data.leadId || '',
+              company: data.company,
+              contactPerson: data.contactPerson,
+              contactEmail: data.contactEmail || '',
+              contactWhatsApp: data.contactWhatsApp,
+              contactPhone: data.contactPhone,
+              channel: 'whatsapp' as PlatformType,
+              messageSubject: null as any,
+              messageContent: data.messageContent,
+              messagePreview: data.messagePreview || data.messageContent?.substring(0, 200) || '',
+              status: data.status,
+              errorMessage: data.errorMessage,
+              messageId: data.messageId,
+              timestamp: data.timestamp?.toDate?.() || new Date(),
+              createdAt: data.createdAt?.toDate?.() || new Date(),
+            });
+          });
+        } catch (error) {
+          console.warn('[Outreach Service] Error fetching outreach_history by contactWhatsApp:', error);
+        }
       }
+
+      // Query inbound_whatsapp by leadId and (if provided) by phone number
+      const inboundDocsById = new Map<string, any>();
 
       try {
         const inboundRef = collection(db, 'inbound_whatsapp');
         const inboundQuery = query(inboundRef, where('leadId', '==', leadId));
         const inboundSnapshot = await getDocs(inboundQuery);
+        inboundSnapshot.forEach((doc) => inboundDocsById.set(doc.id, { id: doc.id, ...doc.data() }));
+      } catch (error) {
+        console.warn('[Outreach Service] Error fetching inbound_whatsapp by leadId:', error);
+      }
 
-        inboundSnapshot.forEach((doc) => {
-          const data: any = doc.data();
+      if (contactWhatsApp && !hasInboundInOutreachHistory) {
+        try {
+          const inboundRef = collection(db, 'inbound_whatsapp');
+          const phoneQuery = query(inboundRef, where('contactWhatsApp', '==', contactWhatsApp));
+          const phoneSnapshot = await getDocs(phoneQuery);
+          phoneSnapshot.forEach((doc) => {
+            if (!inboundDocsById.has(doc.id)) inboundDocsById.set(doc.id, { id: doc.id, ...doc.data() });
+          });
+        } catch (error) {
+          console.warn('[Outreach Service] Error fetching inbound_whatsapp by contactWhatsApp:', error);
+        }
+      }
+
+      if (!hasInboundInOutreachHistory) {
+        inboundDocsById.forEach((data) => {
           allMessages.push({
-            id: doc.id,
+            id: data.id,
             leadId: data.leadId || '',
             company: data.company,
             contactPerson: data.contactPerson,
@@ -162,8 +211,6 @@ export const fetchCompleteConversationByLeadId = async (
             createdAt: data.createdAt?.toDate?.() || new Date(),
           });
         });
-      } catch (error) {
-        console.warn('[Outreach Service] Error fetching inbound_whatsapp by leadId:', error);
       }
     }
 

@@ -2,7 +2,7 @@ const { db } = require('../config/firebase');
 const emailService = require('./emailService');
 const resendService = require('./resendService');
 const whatsappService = require('./whatsappService');
-const { generateSystemPrompt, callOpenRouter } = require('./llmService');
+const { generateSystemPrompt, callLLM } = require('./llmService');
 const { triggerSentimentAnalysis } = require('./sentimentService');
 const { saveOutreachRecord } = require('./outreachService');
 
@@ -10,6 +10,51 @@ const AUTO_REPLY_DELAY_MS = 0;
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
+const AUTO_REPLY_ATTEMPT_LOCK_MS = 90 * 1000;
+
+const WHATSAPP_TYPING_MS_PER_WORD = (() => {
+  const raw = Number(process.env.WHATSAPP_TYPING_MS_PER_WORD || 80);
+  if (!Number.isFinite(raw) || raw < 0) return 80;
+  return Math.floor(raw);
+})();
+
+const WHATSAPP_TYPING_BASE_MS = (() => {
+  const raw = Number(process.env.WHATSAPP_TYPING_BASE_MS || 400);
+  if (!Number.isFinite(raw) || raw < 0) return 400;
+  return Math.floor(raw);
+})();
+
+const WHATSAPP_TYPING_MIN_MS = (() => {
+  const raw = Number(process.env.WHATSAPP_TYPING_MIN_MS || 2800);
+  if (!Number.isFinite(raw) || raw < 0) return 2800;
+  return Math.floor(raw);
+})();
+
+const WHATSAPP_TYPING_MAX_MS = (() => {
+  const raw = Number(process.env.WHATSAPP_TYPING_MAX_MS || 4500);
+  if (!Number.isFinite(raw) || raw < 0) return 4500;
+  return Math.floor(raw);
+})();
+
+const WHATSAPP_TYPING_JITTER_MS = (() => {
+  const raw = Number(process.env.WHATSAPP_TYPING_JITTER_MS || 600);
+  if (!Number.isFinite(raw) || raw < 0) return 600;
+  return Math.floor(raw);
+})();
+
+const WHATSAPP_TYPING_EXTRA_MS = (() => {
+  const raw = Number(process.env.WHATSAPP_TYPING_EXTRA_MS || 0);
+  if (!Number.isFinite(raw) || raw < 0) return 0;
+  return Math.floor(raw);
+})();
+
+const WHATSAPP_PRESENCE_REFRESH_MS = (() => {
+  const raw = Number(process.env.WHATSAPP_PRESENCE_REFRESH_MS || 1000);
+  if (!Number.isFinite(raw) || raw <= 0) return 1000;
+  return Math.floor(raw);
+})();
+
+const clamp = (value, min, max) => Math.min(Math.max(value, min), max);
 
 const buildConversationText = (messages) =>
   messages
@@ -46,10 +91,9 @@ const normalizeTemperature = (value) => {
   return '';
 };
 
-const shouldAutoReply = (sentiment) => {
-  const normalized = normalizeSentiment(sentiment);
-  return normalized === 'cold' || normalized === 'neutral';
-};
+// Auto-reply is now allowed for all sentiment levels.
+// Manual override per-lead is controlled by the `manualReplyMode` flag on the lead document.
+const shouldAutoReply = (_sentiment) => true;
 
 const buildInboundFingerprint = ({ channel, sender, inboundMessage, inboundMessageId }) => {
   if (inboundMessageId) return `message:${String(inboundMessageId).trim()}`;
@@ -60,15 +104,26 @@ const buildInboundFingerprint = ({ channel, sender, inboundMessage, inboundMessa
   return `body:${normalizedChannel}::${normalizedSender}::${normalizedBody}`;
 };
 
-const isRecentDuplicateAutoReply = (lead, fingerprint) => {
+const isAutoReplyAttemptLocked = (lead, fingerprint) => {
   if (!fingerprint) return false;
-  if (String(lead.lastAutoReplySourceFingerprint || '') !== fingerprint) return false;
+  if (String(lead.lastAutoReplyAttemptFingerprint || '') !== fingerprint) return false;
 
-  const lastAtRaw = lead.lastAutoReplySourceAt;
+  const lastAtRaw = lead.lastAutoReplyAttemptAt;
   const lastAt = lastAtRaw?.toDate?.() || (lastAtRaw ? new Date(lastAtRaw) : null);
   if (!(lastAt instanceof Date) || Number.isNaN(lastAt.getTime())) return false;
 
-  return Date.now() - lastAt.getTime() <= DUPLICATE_WINDOW_MS;
+  return Date.now() - lastAt.getTime() <= AUTO_REPLY_ATTEMPT_LOCK_MS;
+};
+
+const isRecentSuccessfulDuplicateAutoReply = (lead, fingerprint) => {
+  if (!fingerprint) return false;
+  if (String(lead.lastAutoReplySourceFingerprint || '') !== fingerprint) return false;
+
+  const lastSentRaw = lead.autoReplyLastSentAt;
+  const lastSentAt = lastSentRaw?.toDate?.() || (lastSentRaw ? new Date(lastSentRaw) : null);
+  if (!(lastSentAt instanceof Date) || Number.isNaN(lastSentAt.getTime())) return false;
+
+  return Date.now() - lastSentAt.getTime() <= DUPLICATE_WINDOW_MS;
 };
 
 async function fetchRecentConversation(leadId) {
@@ -125,7 +180,7 @@ ${replyRules}
 
 Return only the reply text.`;
 
-  const response = await callOpenRouter(
+  const response = await callLLM(
     [
       { role: 'user', content: systemPrompt },
       { role: 'assistant', content: 'Understood.' },
@@ -195,15 +250,18 @@ async function processInboundAutoReply({
 
     const lead = { id: leadDoc.id, ...leadDoc.data() };
 
-    if (isRecentDuplicateAutoReply(lead, inboundFingerprint)) {
+    // Prevent parallel processing storms for the same inbound fingerprint while the LLM is running.
+    if (isAutoReplyAttemptLocked(lead, inboundFingerprint)) {
       return { skipped: true, reason: 'duplicate-inbound-autoreply', lead };
     }
 
-    const currentLeadSentiment = normalizeSentiment(lead.sentiment);
-    const currentTemp = normalizeTemperature(lead.temp ?? lead.temperature ?? lead.temperatureScore ?? '');
-    const sentimentGate = currentTemp || currentLeadSentiment;
+    // If we already successfully auto-replied to this fingerprint recently, skip duplicates.
+    if (isRecentSuccessfulDuplicateAutoReply(lead, inboundFingerprint)) {
+      return { skipped: true, reason: 'duplicate-inbound-autoreply', lead };
+    }
 
-    if (!shouldAutoReply(sentimentGate)) {
+    // If the user toggled manual reply mode from the chat interface, skip auto-reply.
+    if (lead.manualReplyMode === true) {
       txn.update(leadRef, {
         needsHumanReply: true,
         lastInboundAt: new Date(),
@@ -211,13 +269,13 @@ async function processInboundAutoReply({
         lastAutoReplySourceFingerprint: inboundFingerprint,
         lastAutoReplySourceAt: new Date(),
       });
-      return { skipped: true, reason: `human-handoff-existing-${sentimentGate}`, lead };
+      return { skipped: true, reason: 'manual-reply-mode-enabled', lead };
     }
 
-    // Acquire lock early so concurrent webhook deliveries don't all reply.
+    // Acquire attempt lock early so concurrent webhook deliveries don't all reply.
     txn.update(leadRef, {
-      lastAutoReplySourceFingerprint: inboundFingerprint,
-      lastAutoReplySourceAt: new Date(),
+      lastAutoReplyAttemptFingerprint: inboundFingerprint,
+      lastAutoReplyAttemptAt: new Date(),
     });
 
     return { skipped: false, reason: null, lead };
@@ -229,13 +287,15 @@ async function processInboundAutoReply({
 
   const sentiment = normalizeSentiment(await triggerSentimentAnalysis(leadId, sender || lead.email || lead.whatsapp || ''));
 
-  if (!shouldAutoReply(sentiment)) {
+  // Re-check manualReplyMode after sentiment analysis (may have changed during async work).
+  const freshLead = (await db.collection('leads').doc(leadId).get()).data() || {};
+  if (freshLead.manualReplyMode === true) {
     await db.collection('leads').doc(leadId).update({
       needsHumanReply: true,
       lastInboundAt: new Date(),
       lastInboundChannel: channel,
     });
-    return { skipped: true, reason: `human-handoff-${sentiment}` };
+    return { skipped: true, reason: 'manual-reply-mode-enabled' };
   }
 
   const conversation = await fetchRecentConversation(leadId);
@@ -245,7 +305,36 @@ async function processInboundAutoReply({
     return { skipped: true, reason: 'blocked-provider-error-text' };
   }
 
-  if (AUTO_REPLY_DELAY_MS > 0) {
+  // Simulate natural human typing speed before sending.
+  // Formula: ~40 WPM baseline, clamped between 3s and 15s.
+  // Also attempt to send a WhatsApp "composing" presence so the customer
+  // sees the typing dots during the wait period.
+  if (channel === 'whatsapp') {
+    const wordCount = replyBody.trim().split(/\s+/).length;
+    const jitter = WHATSAPP_TYPING_JITTER_MS ? Math.floor(Math.random() * WHATSAPP_TYPING_JITTER_MS) : 0;
+    const typingDelayMs = clamp(
+      WHATSAPP_TYPING_BASE_MS + wordCount * WHATSAPP_TYPING_MS_PER_WORD + jitter + WHATSAPP_TYPING_EXTRA_MS,
+      WHATSAPP_TYPING_MIN_MS,
+      WHATSAPP_TYPING_MAX_MS
+    );
+
+    const whatsappService = require('./openClawWhatsAppService');
+    const composingSent = await whatsappService.sendComposingPresence(sender || lead.whatsapp || lead.contactWhatsApp || '');
+    console.log(`[AutoReply] WhatsApp typing delay: ${typingDelayMs}ms (${wordCount} words, composing=${composingSent})`);
+
+    // Maintain the typing indicator for longer waits (some clients time it out quickly).
+    const refreshEveryMs = WHATSAPP_PRESENCE_REFRESH_MS;
+    const startedAt = Date.now();
+    while (Date.now() - startedAt < typingDelayMs) {
+      const remaining = typingDelayMs - (Date.now() - startedAt);
+      const slice = Math.min(refreshEveryMs, remaining);
+      await wait(slice);
+      if (remaining > 0) {
+        // Refresh even if the initial attempt failed; the gateway may become ready a moment later.
+        await whatsappService.sendComposingPresence(sender || lead.whatsapp || lead.contactWhatsApp || '');
+      }
+    }
+  } else if (AUTO_REPLY_DELAY_MS > 0) {
     await wait(AUTO_REPLY_DELAY_MS);
   }
 
@@ -273,6 +362,8 @@ async function processInboundAutoReply({
     needsHumanReply: false,
     lastAutoReplySourceFingerprint: inboundFingerprint,
     lastAutoReplySourceAt: new Date(),
+    lastAutoReplyAttemptFingerprint: inboundFingerprint,
+    lastAutoReplyAttemptAt: new Date(),
   });
 
   return {

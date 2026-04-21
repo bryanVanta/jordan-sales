@@ -7,7 +7,7 @@ const { db } = require('../config/firebase');
 const emailService = require('./emailService');
 const whatsappService = require('./whatsappService');
 const { generateMessageWithOpenClaw } = require('./openClawService');
-const { generateSystemPrompt, callOpenRouter } = require('./llmService');
+const { generateSystemPrompt, callLLM } = require('./llmService');
 
 /**
  * Select the best communication channel based on available contact info
@@ -52,7 +52,7 @@ Rules:
 
 Return ONLY the message text.`;
 
-  const response = await callOpenRouter(
+  const response = await callLLM(
     [
       { role: 'user', content: systemPrompt || 'You are a helpful sales assistant.' },
       { role: 'assistant', content: 'Understood.' },

@@ -745,7 +745,128 @@ async function generateMessageWithOpenClaw(productInfo, leadInfo) {
   }
 }
 
+const extractTextFromOpenClawResponse = (parsed) => {
+  if (!parsed || typeof parsed !== 'object') return '';
+
+  const candidates = [
+    parsed?.result?.payloads?.[0]?.text,
+    parsed?.result?.payloads?.[0]?.content,
+    parsed?.payloads?.[0]?.text,
+    parsed?.payloads?.[0]?.content,
+    parsed?.result?.text,
+    parsed?.result?.message,
+    parsed?.text,
+    parsed?.message,
+  ];
+
+  for (const candidate of candidates) {
+    const text = typeof candidate === 'string' ? candidate.trim() : '';
+    if (text) return text;
+  }
+
+  const payloads = parsed?.result?.payloads || parsed?.payloads;
+  if (Array.isArray(payloads)) {
+    const joined = payloads
+      .map((payload) => (typeof payload?.text === 'string' ? payload.text : typeof payload?.content === 'string' ? payload.content : ''))
+      .map((value) => String(value || '').trim())
+      .filter(Boolean)
+      .join('\n\n')
+      .trim();
+    if (joined) return joined;
+  }
+
+  return '';
+};
+
+async function callAgentWithOpenClawCliViaSsh({ message, agentId = 'main', timeoutMs = 60000 }) {
+  const wsUrl = getJordanGatewayWsUrl();
+  const remoteGatewayUrl = OPENCLAW_JORDAN_REMOTE_GATEWAY_URL || wsUrl;
+  if (!remoteGatewayUrl) {
+    throw new Error('[OpenClaw] No remote gateway URL configured (set OPENCLAW_JORDAN_REMOTE_GATEWAY_URL)');
+  }
+
+  return new Promise((resolve, reject) => {
+    try {
+      const params = {
+        agentId: String(agentId || 'main'),
+        idempotencyKey: `openclaw-llm-${randomUUID()}`,
+        message: String(message || ''),
+        timeout: Math.ceil(timeoutMs / 1000),
+      };
+
+      const paramsJson = JSON.stringify(params);
+      const tokenArg = OPENCLAW_JORDAN_GATEWAY_TOKEN
+        ? ` --token '${shellEscapeSingleQuoted(OPENCLAW_JORDAN_GATEWAY_TOKEN)}'`
+        : '';
+
+      const remoteCommand =
+        `PARAMS="$(cat)"; ` +
+        `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 ` +
+        `'${shellEscapeSingleQuoted(OPENCLAW_CLI_PATH)}' gateway call agent --json --expect-final ` +
+        `--url '${shellEscapeSingleQuoted(remoteGatewayUrl)}' --params "$PARAMS"${tokenArg} --timeout ${Math.max(1000, Math.floor(timeoutMs))}`;
+
+      const sshProcess = spawn('ssh', ['-o', 'BatchMode=yes', OPENCLAW_SSH_TARGET, remoteCommand], {
+        windowsHide: true,
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let completed = false;
+
+      const timeoutHandle = setTimeout(() => {
+        if (completed) return;
+        completed = true;
+        try {
+          sshProcess.kill();
+        } catch {}
+        reject(new Error(`SSH process timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      sshProcess.stdout.on('data', (data) => {
+        stdout += data.toString();
+      });
+
+      sshProcess.stderr.on('data', (data) => {
+        stderr += data.toString();
+      });
+
+      sshProcess.on('close', (code) => {
+        if (completed) return;
+        completed = true;
+        clearTimeout(timeoutHandle);
+
+        if (code !== 0) {
+          reject(new Error((stderr || stdout || '').trim().slice(0, 600) || `SSH exit ${code}`));
+          return;
+        }
+
+        const parsed = parseJsonObject(stdout);
+        if (!parsed) {
+          resolve({ text: String(stdout || '').trim(), raw: stdout.slice(0, 4000), parsed: null });
+          return;
+        }
+
+        const text = extractTextFromOpenClawResponse(parsed);
+        resolve({ text, raw: parsed, parsed });
+      });
+
+      sshProcess.on('error', (error) => {
+        if (completed) return;
+        completed = true;
+        clearTimeout(timeoutHandle);
+        reject(new Error(`SSH spawn failed: ${error.message}`));
+      });
+
+      sshProcess.stdin.write(paramsJson);
+      sshProcess.stdin.end();
+    } catch (error) {
+      reject(new Error(`SSH setup failed: ${error.message}`));
+    }
+  });
+}
+
 module.exports = {
   findLeadsWithOpenClaw,
   generateMessageWithOpenClaw,
+  callAgentWithOpenClawCliViaSsh,
 };

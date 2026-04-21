@@ -2,6 +2,34 @@ export const runtime = 'nodejs';
 
 type Params = { leadId: string };
 
+export async function PATCH(req: Request, context: { params: Promise<Params> | Params }) {
+  try {
+    const params = 'then' in (context.params as any) ? await (context.params as Promise<Params>) : (context.params as Params);
+    const leadId = String(params?.leadId || '').trim();
+    if (!leadId) {
+      return Response.json({ error: 'Missing leadId' }, { status: 400 });
+    }
+
+    const backendUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL;
+    if (!backendUrl) {
+      return Response.json({ error: 'Missing BACKEND_URL' }, { status: 500 });
+    }
+
+    const body = await req.json().catch(() => ({}));
+    const proxied = await fetch(`${backendUrl.replace(/\/$/, '')}/api/leads/${encodeURIComponent(leadId)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+
+    const proxiedJson = await proxied.json().catch(() => null);
+    return Response.json(proxiedJson, { status: proxied.status });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return Response.json({ error: 'Failed to update lead', details: message }, { status: 500 });
+  }
+}
+
 export async function GET(_req: Request, context: { params: Promise<Params> | Params }) {
   try {
     const params = 'then' in (context.params as any) ? await (context.params as Promise<Params>) : (context.params as Params);

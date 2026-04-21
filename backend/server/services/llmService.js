@@ -1,14 +1,20 @@
 /**
- * LLM Service - OpenRouter with Reasoning
- * Handle AI/LLM interactions with training configuration
+ * LLM Service
+ * Primary: OpenClaw Gateway agent (if configured)
+ * Fallback: OpenRouter (existing behavior)
  */
 
 const axios = require('axios');
 const { getProduct, getAllProducts } = require('./productService');
+const { callAgentWithOpenClawCliViaSsh } = require('./openClawService');
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
 const OPENROUTER_BASE_URL = 'https://openrouter.ai/api/v1';
 const MODEL = 'openai/gpt-oss-120b:free';
+
+const OPENCLAW_LLM_ENABLED = String(process.env.OPENCLAW_LLM_ENABLED || '1').trim() !== '0';
+const OPENCLAW_LLM_AGENT_ID = (process.env.OPENCLAW_LLM_AGENT_ID || process.env.OPENCLAW_JORDAN_AGENT_ID || 'main').trim();
+const OPENCLAW_LLM_TIMEOUT_MS = Number(process.env.OPENCLAW_LLM_TIMEOUT_MS || 60000);
 
 /**
  * Generate system prompt from product configuration
@@ -111,6 +117,50 @@ async function callOpenRouter(messages, enableReasoning = true) {
   throw new Error('Failed to call OpenRouter after maximum retries');
 }
 
+const formatMessagesForOpenClaw = (messages = []) =>
+  (Array.isArray(messages) ? messages : [])
+    .map((m) => {
+      const role = String(m?.role || '').trim().toUpperCase() || 'USER';
+      const content = String(m?.content || '').trim();
+      if (!content) return '';
+      return `${role}:\n${content}`;
+    })
+    .filter(Boolean)
+    .join('\n\n');
+
+async function callOpenClaw(messages, enableReasoning = true) {
+  if (!OPENCLAW_LLM_ENABLED) {
+    throw new Error('OPENCLAW_LLM_ENABLED=0');
+  }
+
+  const conversation = formatMessagesForOpenClaw(messages);
+  const prompt =
+    `You are a helpful assistant. Reply with only the final answer text (no JSON, no markdown).\n\n` +
+    `${conversation}\n\n` +
+    (enableReasoning ? '' : 'Do not include reasoning. Only output the answer.');
+
+  const result = await callAgentWithOpenClawCliViaSsh({
+    message: prompt,
+    agentId: OPENCLAW_LLM_AGENT_ID,
+    timeoutMs: Number.isFinite(OPENCLAW_LLM_TIMEOUT_MS) ? OPENCLAW_LLM_TIMEOUT_MS : 60000,
+  });
+
+  const text = String(result?.text || '').trim();
+  if (!text) throw new Error('OpenClaw returned empty response');
+  return { content: text, model: `openclaw:${OPENCLAW_LLM_AGENT_ID}` };
+}
+
+async function callLLM(messages, enableReasoning = true) {
+  // Try OpenClaw first, then fall back to OpenRouter.
+  try {
+    return await callOpenClaw(messages, enableReasoning);
+  } catch (error) {
+    const errMsg = error instanceof Error ? error.message : String(error);
+    console.warn('[LLM] OpenClaw primary failed, falling back to OpenRouter:', errMsg);
+    return await callOpenRouter(messages, enableReasoning);
+  }
+}
+
 /**
  * Send message to LLM with training context and reasoning
  */
@@ -140,13 +190,13 @@ async function sendMessage(userMessage, conversationHistory = [], enableReasonin
       },
     ];
 
-    // Call OpenRouter with reasoning enabled
-    const response = await callOpenRouter(messages, enableReasoning);
+    // Call primary LLM with fallback
+    const response = await callLLM(messages, enableReasoning);
 
     return {
       content: response.content,
       reasoning_details: response.reasoning_details || null,
-      model: MODEL,
+      model: response.model || MODEL,
     };
   } catch (error) {
     console.error('Error sending message to LLM:', error);
@@ -185,10 +235,6 @@ async function generateLLMPrompt(userMessage, context = {}) {
  */
 async function analyzeCustomerStatus(conversationHistory = []) {
   try {
-    if (!OPENROUTER_API_KEY) {
-      throw new Error('OPENROUTER_API_KEY not configured');
-    }
-
     if (conversationHistory.length === 0) {
       return {
         status: 'NEUTRAL',
@@ -220,28 +266,8 @@ Respond ONLY with valid JSON (no markdown, no code blocks):
   "confidence": 0.0 to 1.0
 }`;
 
-    const response = await axios.post(
-      `${OPENROUTER_BASE_URL}/chat/completions`,
-      {
-        model: MODEL,
-        messages: [
-          {
-            role: 'user',
-            content: analysisPrompt,
-          },
-        ],
-        temperature: 0.3, // Lower temperature for more consistent analysis
-        max_tokens: 300,
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${OPENROUTER_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-
-    const analysisText = response.data.choices[0].message.content.trim();
+    const response = await callLLM([{ role: 'user', content: analysisPrompt }], false);
+    const analysisText = String(response?.content || '').trim();
     
     // Parse JSON response
     let analysis = JSON.parse(analysisText);
@@ -273,5 +299,6 @@ module.exports = {
   generateLLMPrompt,
   sendMessage,
   callOpenRouter,
+  callLLM,
   analyzeCustomerStatus,
 };

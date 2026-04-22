@@ -6,6 +6,31 @@
 const { db, admin } = require('../config/firebase');
 const { callLLM } = require('./llmService');
 
+// Configurable alert recipient — override with SALES_ALERT_WHATSAPP env var.
+const SALES_ALERT_NUMBER = (process.env.SALES_ALERT_WHATSAPP || '+60142319219').trim();
+
+const sendLeadTemperatureAlert = async ({ companyName, sentiment, leadId, whatsapp }) => {
+  try {
+    const whatsappService = require('./whatsappService');
+    const emoji = sentiment === 'hot' ? '🔥' : '🌡️';
+    const label = sentiment === 'hot' ? 'HOT' : 'WARM';
+    const contactLine = whatsapp ? `\n📱 *WhatsApp:* ${whatsapp}` : '';
+    const message =
+      `${emoji} *Sales Alert — Lead Heating Up!*\n\n` +
+      `*${companyName}* has just turned *${label}*.${contactLine}\n\n` +
+      `They are showing genuine interest and should be attended to promptly.\n\n` +
+      `Open the Jordan Salesbot dashboard to follow up now.`;
+    const result = await whatsappService.sendMessage(SALES_ALERT_NUMBER, message);
+    if (result?.success) {
+      console.log(`[Sentiment] Alert sent to ${SALES_ALERT_NUMBER} for lead ${leadId} (${sentiment})`);
+    } else {
+      console.warn(`[Sentiment] Alert send failed for lead ${leadId}:`, result?.error);
+    }
+  } catch (err) {
+    console.warn(`[Sentiment] Could not send temperature alert for lead ${leadId}:`, err.message);
+  }
+};
+
 /**
  * Analyze sentiment using AI
  * Sends conversation messages to LLM and asks for sentiment classification
@@ -40,65 +65,42 @@ CONVERSATION:
 ${conversationText}
 
 SENTIMENT CLASSIFICATIONS:
-- hot: Highly interested, actively engaged, strong buying signals, ready for next steps
-- warm: Interested, responsive, positive signals, but moving at measured pace
-- neutral: Unclear or minimal engagement, polite but no clear buying intent
-- cold: Disengaged, unresponsive, negative tone, or explicitly uninterested
+- hot: Actively pushing toward a deal — asking about pricing/timeline/next steps, requesting demos or proposals, showing urgency, or confirming they want to proceed
+- warm: Genuinely engaged over multiple exchanges — asking substantive questions, sharing their specific situation, or clearly inviting further conversation (NOT just polite one-liners)
+- neutral: Early-stage or vague — short/generic replies like "Yes sure", "OK", "Sounds good", "Maybe", or one-word answers with no follow-up questions or specifics
+- cold: Disengaged — no replies, explicit rejection, "not interested", or only automated/out-of-office responses
 
-ANALYSIS FACTORS (Consider all of these):
+CRITICAL RULES — apply these strictly before classifying:
 
-1. RESPONSE BEHAVIOR:
-   - Response speed: How quickly do they reply? (faster = more interested)
-   - Response consistency: Do they reply each time or go silent?
-   - Initiation: Did they start the conversation or only respond?
+RULE 1 — SHORT OR GENERIC REPLIES ARE NEUTRAL, NOT WARM:
+  Responses like "Yes sure", "OK", "Sure", "Maybe", "I'll check", "Thanks", "Noted", "Interesting" are
+  NEUTRAL by default, regardless of tone. A customer must demonstrate actual engagement with specifics
+  to move above neutral.
 
-2. MESSAGE CONTENT & QUALITY:
-   - Message length: Longer, detailed messages vs brief, generic replies
-   - Specificity: References to your product/service details
-   - Questions: Asking detailed questions about implementation, features, pricing
-   - Objections: Raising concerns shows engagement; no response suggests disinterest
+RULE 2 — WARM REQUIRES SUBSTANCE ACROSS MULTIPLE MESSAGES:
+  A lead is warm ONLY if the customer has sent at least 2 substantive replies that include one or more of:
+  - Asking a specific question about features, pricing, timeline, or implementation
+  - Describing their own business problem or situation in detail
+  - Proposing or agreeing to a specific next step (not just "sure")
+  - Sharing context that shows they are seriously evaluating the solution
 
-3. TONE & LANGUAGE:
-   - Tone: Enthusiastic, positive, collaborative vs dismissive, cold, generic
-   - Professionalism: Well-written, thoughtful vs lazy, careless
-   - Personalization: Do they mention your name, company details, or customize responses?
-   - Formality level: Friendly, warm language vs overly formal or detached
+RULE 3 — HOT REQUIRES CLEAR BUYING SIGNALS:
+  A lead is hot ONLY if the customer shows strong purchase intent, such as:
+  - Explicitly requesting a proposal, demo, trial, or contract
+  - Asking about pricing, payment terms, or ROI
+  - Mentioning a specific timeline or deadline for a decision
+  - Saying they want to proceed or move forward
+  - Introducing other decision-makers or stakeholders
 
-4. EAGERNESS & INTENT SIGNALS:
-   - Timeline mentions: "We need this by...", "Looking to implement soon"
-   - Budget discussion: Asking about pricing, payment terms, ROI
-   - Decision authority: Language suggesting they can make or influence decisions
-   - Next steps: Proposing meetings, demos, trials, or action items
-   - Action requests: "Can you send proposal?", "Let's schedule a call"
-
-5. ENGAGEMENT DEPTH:
-   - Follow-up initiations: Do they follow up if you don't respond?
-   - Meeting requests: Asking for calls, demos, or in-person meetings
-   - Document/material requests: Asking for case studies, whitepapers, proposals
-   - Stakeholder involvement: Mentioning others who need to be involved
-   - Technical depth: Showing understanding of your solution's complexities
-
-6. ADDITIONAL POSITIVE SIGNALS:
-   - Positive feedback: Compliments about your product/service
-   - Referral willingness: "We'd recommend you to..."
-   - Expansion opportunity: "We have other departments that need..."
-   - Urgency language: "ASAP", "urgent", "time-sensitive"
-   - Competitive comparison: Comparing you favorably to alternatives
-   - Use case specificity: Describing their exact problem/need
-
-7. NEGATIVE SIGNALS:
-   - Delayed responses: Going silent for extended periods then brief replies
-   - Objection dismissal: Rejecting solutions without engagement
-   - Price sensitivity complaints: Only focusing on cost, not value
-   - "We'll think about it" without specifics: Vague, non-committal language
-   - Competitor mentions: Saying they're going with competitor or looking elsewhere
-   - Generic responses: Template/copy-paste style answers worse than previous messages
+RULE 4 — DON'T OVER-INFER FROM ONE MESSAGE:
+  If the conversation is very short (1-2 customer messages total), default to NEUTRAL unless Rule 3
+  signals are unmistakably present.
 
 SCORING GUIDANCE:
-- HOT: Multiple positive signals (fast replies, long messages, questions, meeting requests, timeline/budget discussion)
-- WARM: Some positive signals (responsive, positive tone, occasional questions, willing to engage)
-- NEUTRAL: Mixed or unclear (brief replies, polite but vague, no clear intent signals)
-- COLD: Negative signals dominate (no response, short dismissive replies, explicit rejection, gone silent)
+- HOT: Clear buying intent signals (Rule 3) present — multiple strong signals preferred
+- WARM: Genuine multi-message engagement with substance (Rule 2) — NOT just being polite
+- NEUTRAL: Short/generic/vague responses, early stage, or insufficient data (Rule 1 & 4)
+- COLD: Rejection, silence, or explicit disinterest
 
 Respond with ONLY the sentiment classification word: hot, warm, neutral, or cold
 Do not include any other text or explanation.`;
@@ -134,6 +136,11 @@ Do not include any other text or explanation.`;
  */
 const analyzeSingleLead = async (leadId) => {
   try {
+    // Fetch lead doc first so we can detect sentiment upgrades and get the company name.
+    const leadDoc = await db.collection('leads').doc(leadId).get();
+    const leadData = leadDoc.exists ? leadDoc.data() : {};
+    const companyName = leadData.company || leadData.companyName || 'Unknown Company';
+
     // Fetch all messages for this lead across outbound + inbound channels
     const [outreachSnapshot, inboundEmailSnapshot, inboundWhatsAppSnapshot] = await Promise.all([
       db.collection('outreach_history').where('leadId', '==', leadId).get(),
@@ -179,19 +186,32 @@ const analyzeSingleLead = async (leadId) => {
       return new Date(aTime).getTime() - new Date(bTime).getTime();
     });
 
+    // Only analyze the most recent 20 messages — old conversations from previous
+    // outreach cycles should not keep inflating the sentiment score.
+    const recentMessages = allMessages.slice(-20);
+
     // If there's no inbound (customer) reply yet, don't ask the LLM to guess "warm/hot"
     // based only on our outbound messages. Use a simple time-based heuristic.
     let sentiment;
-    const hasInboundReply = allMessages.some((msg) => String(msg.status || '').toLowerCase() === 'received');
+    const hasInboundReply = recentMessages.some((msg) => String(msg.status || '').toLowerCase() === 'received');
 
     if (!hasInboundReply) {
-      const lastMsg = allMessages[allMessages.length - 1];
+      const lastMsg = recentMessages[recentMessages.length - 1];
       const lastTime = (lastMsg.createdAt || lastMsg.timestamp)?.toDate?.() || new Date(lastMsg.createdAt || lastMsg.timestamp);
       const hoursSinceLastOutbound = (Date.now() - new Date(lastTime).getTime()) / (1000 * 60 * 60);
       sentiment = hoursSinceLastOutbound >= 24 ? 'cold' : 'neutral';
     } else {
       // Analyze sentiment using AI
-      sentiment = await analyzeSentimentWithAI(allMessages);
+      sentiment = await analyzeSentimentWithAI(recentMessages);
+
+      // If the last message in the conversation is outbound (customer hasn't replied to it yet),
+      // cap at warm — can't be hot while waiting for a reply.
+      const lastMsg = recentMessages[recentMessages.length - 1];
+      const lastMsgIsOutbound = String(lastMsg.status || '').toLowerCase() !== 'received';
+      if (lastMsgIsOutbound && sentiment === 'hot') {
+        sentiment = 'warm';
+        console.log(`[Sentiment AI] Capped lead ${leadId} from hot → warm: last message is outbound (awaiting reply)`);
+      }
     }
 
     // Update lead with sentiment
@@ -200,10 +220,22 @@ const analyzeSingleLead = async (leadId) => {
       sentimentLastUpdated: new Date(),
       messageCount: allMessages.length,
       lastMessageTime: allMessages[allMessages.length - 1].createdAt || allMessages[allMessages.length - 1].timestamp,
-      sentimentAnalysisMethod: 'ai', // Track that this was AI-analyzed
+      sentimentAnalysisMethod: 'ai',
     });
 
     console.log(`[Sentiment AI] Updated lead ${leadId}: ${sentiment} (${allMessages.length} messages)`);
+
+    // Alert rules:
+    // 1. Sentiment is warm/hot AND no alert has been sent in past 24h (covers all cases including stale leads)
+    // 2. This ensures every time a customer engages and hits warm/hot, you get notified once per day max.
+    const lastAlert = leadData.lastAlertSentAt?.toDate?.() || (leadData.lastAlertSentAt ? new Date(leadData.lastAlertSentAt) : null);
+    const hoursSinceLastAlert = lastAlert ? (Date.now() - lastAlert.getTime()) / (1000 * 60 * 60) : Infinity;
+    const shouldAlert = (sentiment === 'warm' || sentiment === 'hot') && hoursSinceLastAlert >= 24;
+    if (shouldAlert) {
+      await db.collection('leads').doc(leadId).update({ lastAlertSentAt: new Date() });
+      sendLeadTemperatureAlert({ companyName, sentiment, leadId, whatsapp: leadData.whatsapp || '' }).catch(() => {});
+    }
+
     return sentiment;
   } catch (error) {
     console.error(`[Sentiment AI] Error analyzing lead ${leadId}:`, error.message);

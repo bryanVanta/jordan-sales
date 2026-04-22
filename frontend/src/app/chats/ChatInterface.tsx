@@ -118,19 +118,6 @@ interface CustomerData {
   contactWhatsApp?: string; // Alternate WhatsApp field from Firestore
 }
 
-const CUSTOMERS: CustomerData[] = [
-  { 
-    id: 1, 
-    name: "Booking Team", 
-    email: "zeroyuki.pradibta@gmail.com",
-    company: "St Giles Wembley Penang",
-    time: "10:32 AM", 
-    messages: [],
-    media: [],
-    progress: [],
-    temperature: 65,
-  },
-];
 
 const DEFAULT_MEDIA: MediaItem[] = [
   { label: 'Documents', count: '0 files, 0mb', icon: <FileText size={16} />, border: 'border-purple-100', bg: 'bg-purple-50', text: 'text-purple-600' },
@@ -245,7 +232,8 @@ const ChatInterface = () => {
   const [showContactInfo, setShowContactInfo] = useState(true);
   const [inputValue, setInputValue] = useState("");
   const [showPlusMenu, setShowPlusMenu] = useState(false);
-  const [allCustomers, setAllCustomers] = useState<CustomerData[]>(CUSTOMERS);
+  const [allCustomers, setAllCustomers] = useState<CustomerData[]>([]);
+  const [loadingChats, setLoadingChats] = useState(true);
   const [activeView, setActiveView] = useState<'list' | 'chat' | 'info'>('list');
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
@@ -519,6 +507,7 @@ const ChatInterface = () => {
           });
         });
         setLoadedCustomerIds(new Set(leadsWithMessages.map((lead) => lead.id)));
+        setLoadingChats(false);
 
         setSelectedCustomerId((prev) => {
           if (leadsWithMessages.length === 0) return 1;
@@ -804,7 +793,19 @@ const ChatInterface = () => {
           </div>
 
           <div className="flex-1 overflow-y-auto pr-1 custom-scrollbar space-y-1.5 pb-28">
-            {allCustomers.length > 0 ? (
+            {loadingChats ? (
+              <div className="flex flex-col gap-2 pt-2">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="flex items-center gap-3 p-3 rounded-2xl bg-white animate-pulse">
+                    <div className="w-10 h-10 rounded-full bg-gray-100 shrink-0" />
+                    <div className="flex-1 space-y-2">
+                      <div className="h-3 bg-gray-100 rounded w-2/3" />
+                      <div className="h-2.5 bg-gray-100 rounded w-1/2" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : allCustomers.length > 0 ? (
               allCustomers.map((customer) => {
                 const lastMsg = customer.messages.length > 0 ? customer.messages[customer.messages.length - 1].text.substring(0, 50) : "No messages";
                 return (

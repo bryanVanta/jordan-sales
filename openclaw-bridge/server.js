@@ -300,6 +300,73 @@ app.get('/health', (_req, res) => {
   res.status(200).json({ ok: true });
 });
 
+const shEscape = (value = '') => String(value).replace(/'/g, `'\"'\"'`);
+
+const sendWhatsAppViaDocker = async ({ target, message, account, timeoutMs }) => {
+  const accountArg = account ? ` --account '${shEscape(account)}'` : '';
+  const cmd =
+    `set -eu; ` +
+    `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 ` +
+    `openclaw message send --json --channel whatsapp ` +
+    `--target '${shEscape(target)}'${accountArg} ` +
+    `--message '${shEscape(message)}'`;
+
+  return await new Promise((resolve, reject) => {
+    const child = spawn('docker', ['exec', '-i', DOCKER_CONTAINER, 'sh', '-lc', cmd], {
+      windowsHide: true,
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    const killTimer = setTimeout(() => {
+      child.kill();
+      reject(new Error(`openclaw whatsapp send timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    child.stdout.on('data', (d) => { stdout += d.toString(); });
+    child.stderr.on('data', (d) => { stderr += d.toString(); });
+
+    child.on('close', (code) => {
+      clearTimeout(killTimer);
+      if (code !== 0) {
+        reject(new Error((stderr || stdout || '').trim().slice(0, 500) || `docker exec exit ${code}`));
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+
+    child.on('error', (err) => {
+      clearTimeout(killTimer);
+      reject(err);
+    });
+  });
+};
+
+app.post('/api/channels/whatsapp/send', async (req, res) => {
+  const token = getTokenFromRequest(req);
+  const expectedToken = (process.env.OPENCLAW_JORDAN_GATEWAY_TOKEN || process.env.OPENCLAW_GATEWAY_TOKEN || '').trim();
+  if (expectedToken && token !== expectedToken) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  const { target, message, account } = req.body || {};
+  if (!target || !message) {
+    return res.status(400).json({ error: 'Missing target or message' });
+  }
+
+  try {
+    const timeoutMs = Number(process.env.OPENCLAW_TIMEOUT_MS || 30000);
+    const { stdout } = await sendWhatsAppViaDocker({ target, message, account, timeoutMs });
+    const parsed = parseJsonObject(stdout);
+    const messageId = parsed?.messageId || parsed?.id || parsed?.data?.id || null;
+    res.status(200).json({ success: true, messageId, raw: parsed || stdout.slice(0, 500) });
+  } catch (err) {
+    console.error('[openclaw-bridge] WhatsApp send failed:', err.message);
+    res.status(502).json({ success: false, error: err.message });
+  }
+});
+
 const runLeadJob = async (jobId) => {
   const job = jobs.get(jobId);
   if (!job) return;

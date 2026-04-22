@@ -226,8 +226,11 @@ class OpenClawWhatsAppService {
       { 'X-Gateway-Token': token },
     ];
 
+    console.log(`[OpenClaw] HTTP send attempting: ${httpBase} (target: ${target})`);
+
     for (const endpoint of endpoints) {
       for (const extra of authCandidates) {
+        const authKey = Object.keys(extra)[0];
         try {
           const res = await fetch(`${httpBase}${endpoint}`, {
             method: 'POST',
@@ -236,11 +239,16 @@ class OpenClawWhatsAppService {
             signal: AbortSignal.timeout(30000),
           });
 
-          if (res.status === 404) break; // wrong endpoint, try the next one
+          const responseText = await res.text().catch(() => '');
+
+          if (res.status === 404) {
+            console.log(`[OpenClaw] HTTP ${endpoint} → 404 (wrong endpoint, trying next)`);
+            break;
+          }
 
           if (res.ok) {
-            const data = await res.json().catch(() => null);
-            console.log(`[OpenClaw] HTTP send succeeded via ${endpoint}`);
+            console.log(`[OpenClaw] HTTP send succeeded via ${endpoint} (auth: ${authKey})`);
+            const data = responseText ? JSON.parse(responseText) : null;
             return {
               success: true,
               messageId: data?.messageId || data?.id || data?.data?.id || null,
@@ -248,14 +256,14 @@ class OpenClawWhatsAppService {
             };
           }
 
+          console.warn(`[OpenClaw] HTTP ${endpoint} [${authKey}] → ${res.status}: ${responseText.slice(0, 300)}`);
+
           if (res.status !== 401 && res.status !== 403) {
-            // Non-auth error — log and try next endpoint
-            const text = await res.text().catch(() => '');
-            console.warn(`[OpenClaw] HTTP send ${endpoint} returned ${res.status}:`, text.slice(0, 200));
-            break;
+            break; // Non-auth error — try next endpoint
           }
         } catch (err) {
-          console.warn(`[OpenClaw] HTTP send ${endpoint} error:`, err?.message || err);
+          console.warn(`[OpenClaw] HTTP ${endpoint} [${authKey}] → fetch error: ${err?.message || err}`);
+          break; // Network error — try next endpoint
         }
       }
     }

@@ -59,6 +59,10 @@ jordan-salesbot/
 - **Real-time Database**: Firebase Firestore
 - **Task Queue**: BullMQ + Redis
 
+### Optional: Media storage (Cloudinary)
+To render inbound WhatsApp images/voice notes in the chat UI, configure Cloudinary on the backend:
+`CLOUDINARY_CLOUD_NAME`, `CLOUDINARY_API_KEY`, `CLOUDINARY_API_SECRET` (optional `CLOUDINARY_FOLDER`).
+
 ## Getting Started
 
 ### Prerequisites

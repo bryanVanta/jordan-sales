@@ -3,6 +3,24 @@ import { collection, query, where, orderBy, getDocs } from 'firebase/firestore';
 
 export type PlatformType = 'email' | 'whatsapp' | 'telegram';
 
+export type MediaAttachment = {
+  kind?: 'image' | 'audio' | 'unknown' | string;
+  url?: string;
+  mimeType?: string;
+  fileName?: string;
+  durationMs?: number;
+  isVoiceNote?: boolean;
+  caption?: string;
+  transcript?: string;
+  provider?: string;
+  originalUrl?: string;
+  cloudinary?: {
+    publicId?: string;
+    bytes?: number;
+    resourceType?: string;
+  };
+};
+
 export interface OutreachMessage {
   id: string;
   leadId: string;
@@ -20,6 +38,8 @@ export interface OutreachMessage {
   messageId?: string;
   timestamp: Date;
   createdAt: Date;
+  media?: MediaAttachment | MediaAttachment[] | null;
+  transcript?: string | null;
 }
 
 const getMessageTimestamp = (message: OutreachMessage) =>
@@ -30,6 +50,9 @@ const dedupeConversationMessages = (messages: OutreachMessage[]): OutreachMessag
 
   return messages.filter((message) => {
     const timestampMs = getMessageTimestamp(message);
+    const mediaKey = Array.isArray(message.media)
+      ? message.media.map((m) => String(m?.url || '')).filter(Boolean).join(',')
+      : String((message.media as any)?.url || '');
     const key =
       message.messageId ||
       [
@@ -38,6 +61,7 @@ const dedupeConversationMessages = (messages: OutreachMessage[]): OutreachMessag
         message.status || '',
         message.contactWhatsApp || message.contactEmail || '',
         message.messageContent || '',
+        mediaKey,
         timestampMs,
       ].join('::');
 
@@ -91,6 +115,8 @@ export const fetchCompleteConversationByLeadId = async (
           messageId: data.messageId,
           timestamp: data.timestamp?.toDate?.() || new Date(),
           createdAt: data.createdAt?.toDate?.() || new Date(),
+          media: data.media ?? null,
+          transcript: data.transcript ?? null,
         });
       });
     } catch (error) {
@@ -121,6 +147,8 @@ export const fetchCompleteConversationByLeadId = async (
             messageId: data.messageId,
             timestamp: data.timestamp?.toDate?.() || new Date(),
             createdAt: data.createdAt?.toDate?.() || new Date(),
+            media: data.media ?? null,
+            transcript: data.transcript ?? null,
           });
         });
       } catch (error) {
@@ -158,6 +186,8 @@ export const fetchCompleteConversationByLeadId = async (
               messageId: data.messageId,
               timestamp: data.timestamp?.toDate?.() || new Date(),
               createdAt: data.createdAt?.toDate?.() || new Date(),
+              media: data.media ?? null,
+              transcript: data.transcript ?? null,
             });
           });
         } catch (error) {
@@ -209,6 +239,8 @@ export const fetchCompleteConversationByLeadId = async (
             messageId: data.messageId,
             timestamp: data.timestamp?.toDate?.() || new Date(),
             createdAt: data.createdAt?.toDate?.() || new Date(),
+            media: data.media ?? null,
+            transcript: data.transcript ?? null,
           });
         });
       }

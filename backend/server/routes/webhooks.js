@@ -393,12 +393,6 @@ router.post('/inbound-whatsapp', async (req, res) => {
           const existingDoc = existingByMessageId.docs[0];
           const existingData = existingDoc.data() || {};
           backfillDuplicateBestEffort(existingDoc, existingData);
-          triggerAutoReplyBestEffort({
-            leadId: existingData.leadId,
-            bodyText: existingData.content || resolvedBody,
-            senderNumber: existingData.contactWhatsApp || from,
-            messageIdValue: messageId,
-          });
           return res.json({ success: true, duplicate: true, recordId: existingDoc.id });
         }
 
@@ -421,12 +415,6 @@ router.post('/inbound-whatsapp', async (req, res) => {
           console.log(`[Webhook] Duplicate inbound WhatsApp ignored via recent match: ${duplicateRecent.id}`);
           const existingData = duplicateRecent.data() || {};
           backfillDuplicateBestEffort(duplicateRecent, existingData);
-          triggerAutoReplyBestEffort({
-            leadId: existingData.leadId,
-            bodyText: existingData.content || resolvedBody,
-            senderNumber: existingData.contactWhatsApp || from,
-            messageIdValue: messageId,
-          });
           return res.json({ success: true, duplicate: true, recordId: duplicateRecent.id });
         }
       } else {
@@ -447,12 +435,6 @@ router.post('/inbound-whatsapp', async (req, res) => {
           console.log(`[Webhook] Duplicate inbound WhatsApp ignored via recent match: ${duplicateRecent.id}`);
           const existingData = duplicateRecent.data() || {};
           backfillDuplicateBestEffort(duplicateRecent, existingData);
-          triggerAutoReplyBestEffort({
-            leadId: existingData.leadId,
-            bodyText: existingData.content || resolvedBody,
-            senderNumber: existingData.contactWhatsApp || from,
-            messageIdValue: messageId,
-          });
           return res.json({ success: true, duplicate: true, recordId: duplicateRecent.id });
         }
       }

@@ -66,6 +66,18 @@ const buildConversationText = (messages) =>
     .filter(Boolean)
     .join('\n');
 
+const looksLikeGreeting = (text) => {
+  const t = String(text || '').trim().toLowerCase();
+  if (!t) return false;
+  if (t.length > 40) return false;
+  return /^(hi|hey|hello|yo|sup|good\s*(morning|afternoon|evening)|morning|evening)\b/.test(t);
+};
+
+const recentlyAskedDeviceCount = (conversationText) => {
+  const t = String(conversationText || '').toLowerCase();
+  return t.includes('one device') && t.includes('multiple devices');
+};
+
 const normalizeSentiment = (value) => {
   const sentiment = String(value || '').trim().toLowerCase();
   return ['hot', 'warm', 'neutral', 'cold'].includes(sentiment) ? sentiment : 'neutral';
@@ -147,6 +159,12 @@ async function generateAutoReplyMessage({ lead, channel, conversation, inboundMe
   const conversationText = buildConversationText(conversation);
   const latestInbound = String(inboundMessage || '').trim();
   const companyName = lead.company || 'your company';
+
+  // Guard: if the user only sends a greeting after we already asked the "one device vs multiple devices"
+  // clarifier, don't re-run the LLM into the same long loop—send a short, direct reprompt.
+  if (channel === 'whatsapp' && looksLikeGreeting(latestInbound) && recentlyAskedDeviceCount(conversationText)) {
+    return 'Hi! Quick one so I can help: is this happening on one device, or multiple devices?';
+  }
 
   const replyRules =
     channel === 'whatsapp'

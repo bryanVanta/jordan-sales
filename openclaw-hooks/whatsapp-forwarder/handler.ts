@@ -184,8 +184,21 @@ const sha1Hex = async (value: string) => {
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
   }
-  // No crypto available: best-effort non-cryptographic id
+  // No crypto available.
   return '';
+};
+
+const stableIdHex = async (value: string) => {
+  const sha1 = await sha1Hex(value);
+  if (sha1) return sha1;
+
+  // FNV-1a 32-bit (non-crypto). Used only for stable message IDs / dedupe when WebCrypto is missing.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < value.length; i++) {
+    hash ^= value.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, '0');
 };
 
 const bytesToBase64 = (bytes: Uint8Array) => {
@@ -446,6 +459,15 @@ const handler = async (event: OpenClawHookEvent) => {
       media = media.map((m) => ((m as any).kind === 'audio' ? ({ ...(m as any), transcript } as any) : m));
     }
 
+    // OpenClaw often emits both `message:received` and `message:preprocessed`.
+    // To avoid duplicate forwards for normal text messages, only keep `preprocessed` when it adds value.
+    const isPreprocessedEvent = eventType === 'message' && eventAction === 'preprocessed';
+    if (isPreprocessedEvent) {
+      const hasPlaceholder = Boolean(getPlaceholderKind(bodyText));
+      const hasMediaFields = media.some((m: any) => Boolean(String(m?.url || '').trim()) || Boolean(String(m?.mimeType || '').trim()) || Boolean(String(m?.fileName || '').trim()));
+      if (!hasPlaceholder && !String(transcript || '').trim() && !hasMediaFields) return;
+    }
+
     if (debug) {
       const meta = (event as any)?.context?.metadata || {};
       const metaKeys = meta && typeof meta === 'object' ? Object.keys(meta).slice(0, 40) : [];
@@ -479,8 +501,23 @@ const handler = async (event: OpenClawHookEvent) => {
         (event as any)?.id
       ) || '';
     if (!messageId) {
-      const seed = `${String(event?.sessionKey || '')}|${from}|${to}|${timestampIso}|${body.slice(0, 120)}`;
-      const digest = await sha1Hex(seed);
+      const isMediaish = Boolean(getPlaceholderKind(bodyText)) || Boolean(transcript) || media.some((m: any) => m?.kind === 'image' || m?.kind === 'audio');
+      const tsMs = (() => {
+        const raw = (event as any)?.timestamp;
+        const dt = typeof raw === 'string' || typeof raw === 'number' ? new Date(raw as any) : null;
+        const ms = dt && !Number.isNaN(dt.getTime()) ? dt.getTime() : Date.now();
+        return ms;
+      })();
+      // Bucket timestamps to keep gateway retries + lifecycle duplicates stable while still distinguishing
+      // repeated short messages over time.
+      const bucketMs = isMediaish ? 120_000 : 15_000;
+      const timeBucket = Math.floor(tsMs / bucketMs);
+      const bodyKey = isMediaish
+        ? `${getPlaceholderKind(bodyText) || 'media'}|${String(transcript || '').trim().slice(0, 80)}`
+        : String(body || '').trim().slice(0, 120);
+
+      const seed = `${String(event?.sessionKey || '')}|${from}|${to}|${timeBucket}|${bodyKey}`;
+      const digest = await stableIdHex(seed);
       messageId = digest ? `oc_${digest.slice(0, 32)}` : `oc_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
     }
 

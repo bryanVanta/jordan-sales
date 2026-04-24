@@ -459,6 +459,25 @@ const handler = async (event: OpenClawHookEvent) => {
       media = media.map((m) => ((m as any).kind === 'audio' ? ({ ...(m as any), transcript } as any) : m));
     }
 
+    // If OpenClaw emits only a placeholder (<media:...>) but it *did* write the actual file to disk,
+    // attach a best-effort localPath/fileName hint early so we can:
+    // 1) generate a non-colliding synthetic messageId for distinct voice notes within the same time bucket, and
+    // 2) later upload the correct file to Cloudinary.
+    const placeholderKindEarly = getPlaceholderKind(bodyText);
+    if (cloudinaryEnabled() && (placeholderKindEarly === 'audio' || placeholderKindEarly === 'image') && media.length) {
+      const kind = placeholderKindEarly as 'audio' | 'image';
+      const found = await findLatestInboundFile(kind);
+      if (found) {
+        for (const item of media) {
+          const itemKind = (item as any).kind === 'audio' ? 'audio' : (item as any).kind === 'image' ? 'image' : null;
+          if (itemKind !== kind) continue;
+          (item as any).localPath = (item as any).localPath || found.path;
+          (item as any).fileName = (item as any).fileName || found.fileName;
+          (item as any).mimeType = (item as any).mimeType || found.mimeType;
+        }
+      }
+    }
+
     // OpenClaw often emits both `message:received` and `message:preprocessed`.
     // To avoid duplicate forwards for normal text messages, only keep `preprocessed` when it adds value.
     const isPreprocessedEvent = eventType === 'message' && eventAction === 'preprocessed';
@@ -482,6 +501,7 @@ const handler = async (event: OpenClawHookEvent) => {
           hasUrl: Boolean(String(m?.url || '').trim()),
           mimeType: m?.mimeType || null,
           fileName: m?.fileName || null,
+          localPath: (m as any)?.localPath || null,
           provider: m?.provider || null,
         })),
         cloudinaryEnabled: cloudinaryEnabled(),
@@ -513,7 +533,11 @@ const handler = async (event: OpenClawHookEvent) => {
       const bucketMs = isMediaish ? 120_000 : 15_000;
       const timeBucket = Math.floor(tsMs / bucketMs);
       const bodyKey = isMediaish
-        ? `${getPlaceholderKind(bodyText) || 'media'}|${String(transcript || '').trim().slice(0, 80)}`
+        ? `${getPlaceholderKind(bodyText) || 'media'}|${String(transcript || '').trim().slice(0, 80)}|${media
+            .map((m: any) => String(m?.fileName || m?.localPath || '').trim())
+            .filter(Boolean)
+            .join(',')
+            .slice(0, 120)}`
         : String(body || '').trim().slice(0, 120);
 
       const seed = `${String(event?.sessionKey || '')}|${from}|${to}|${timeBucket}|${bodyKey}`;
@@ -531,8 +555,9 @@ const handler = async (event: OpenClawHookEvent) => {
         if (!kind) continue;
         const url = String((item as any).url || '').trim();
         if (url) continue;
-        const found = await findLatestInboundFile(kind);
-        if (!found) continue;
+        const localPath = String((item as any).localPath || '').trim();
+        const found = localPath ? { path: localPath, fileName: String((item as any).fileName || '').trim(), mimeType: String((item as any).mimeType || '').trim() } : await findLatestInboundFile(kind);
+        if (!found || !String(found.path || '').trim()) continue;
         const fs = await (async () => {
           try {
             return await import('node:fs/promises');

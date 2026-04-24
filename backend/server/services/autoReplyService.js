@@ -73,9 +73,64 @@ const looksLikeGreeting = (text) => {
   return /^(hi|hey|hello|yo|sup|good\s*(morning|afternoon|evening)|morning|evening)\b/.test(t);
 };
 
+const isMediaOnlyMessage = (text) => {
+  const t = String(text || '').trim();
+  if (!t) return false;
+  if (/^\[media\]$/i.test(t)) return true;
+  return /<\s*media\s*:/i.test(t);
+};
+
 const recentlyAskedDeviceCount = (conversationText) => {
   const t = String(conversationText || '').toLowerCase();
-  return t.includes('one device') && t.includes('multiple devices');
+  if (!t) return false;
+  return (
+    t.includes('one device') ||
+    t.includes('single device') ||
+    t.includes('multiple devices') ||
+    t.includes('many devices')
+  );
+};
+
+const answersDeviceCountQuestion = (text) => {
+  const t = String(text || '').trim().toLowerCase();
+  if (!t) return false;
+  return (
+    t.includes('one device') ||
+    t.includes('single device') ||
+    t.includes('just one device') ||
+    t.includes('multiple devices') ||
+    t.includes('many devices') ||
+    t === 'one' ||
+    t === 'multiple'
+  );
+};
+
+const looksTooShortToActOn = (text) => {
+  const t = String(text || '').trim();
+  if (!t) return true;
+  const words = t.split(/\s+/).filter(Boolean);
+  return t.length < 8 || words.length <= 1;
+};
+
+const looksLikeTroubleshooting = (text) => {
+  const t = String(text || '').trim().toLowerCase();
+  if (!t) return false;
+  return (
+    t.includes('issue') ||
+    t.includes('problem') ||
+    t.includes('bug') ||
+    t.includes('error') ||
+    t.includes('fail') ||
+    t.includes('failed') ||
+    t.includes('not working') ||
+    t.includes("can't") ||
+    t.includes('cannot') ||
+    t.includes('unable') ||
+    t.includes('stuck') ||
+    t.includes('crash') ||
+    t.includes('freeze') ||
+    t.includes('hang')
+  );
 };
 
 const normalizeSentiment = (value) => {
@@ -160,10 +215,27 @@ async function generateAutoReplyMessage({ lead, channel, conversation, inboundMe
   const latestInbound = String(inboundMessage || '').trim();
   const companyName = lead.company || 'your company';
 
-  // Guard: if the user only sends a greeting after we already asked the "one device vs multiple devices"
-  // clarifier, don't re-run the LLM into the same long loop—send a short, direct reprompt.
-  if (channel === 'whatsapp' && looksLikeGreeting(latestInbound) && recentlyAskedDeviceCount(conversationText)) {
-    return 'Hi! Quick one so I can help: is this happening on one device, or multiple devices?';
+  // If the user sends only an attachment placeholder (no text/transcript), ask for a short typed description
+  // instead of letting the LLM loop on generic clarifying questions.
+  if (channel === 'whatsapp' && isMediaOnlyMessage(latestInbound)) {
+    return `Thanks, I received your attachment. What’s the issue / what should I check? Reply in one short sentence.`;
+  }
+
+  // If we've already asked any "device count" clarifier and the user still hasn't answered it,
+  // avoid repeating the same question forever—ask for a short problem description instead.
+  if (
+    channel === 'whatsapp' &&
+    recentlyAskedDeviceCount(conversationText) &&
+    !answersDeviceCountQuestion(latestInbound) &&
+    (isMediaOnlyMessage(latestInbound) || looksLikeTroubleshooting(latestInbound))
+  ) {
+    return `Got it. What exactly is wrong? (One short sentence is fine.)`;
+  }
+
+  // If the inbound is too short (common with 1s voice notes transcribing to "hi"),
+  // do not let the LLM hallucinate a random troubleshooting loop.
+  if (channel === 'whatsapp' && (looksLikeGreeting(latestInbound) || looksTooShortToActOn(latestInbound))) {
+    return `Hi! What can I help with? Tell me what happened in one short sentence.`;
   }
 
   const replyRules =
@@ -319,6 +391,14 @@ async function processInboundAutoReply({
   const conversation = await fetchRecentConversation(leadId);
   const replyBody = await generateAutoReplyMessage({ lead, channel, conversation, inboundMessage });
   if (!replyBody) return { skipped: true, reason: 'empty-reply' };
+
+  try {
+    const inboundPreview = String(inboundMessage || '').trim().slice(0, 120);
+    const replyPreview = String(replyBody || '').trim().slice(0, 120);
+    console.log(`[AutoReply] Generated (${channel}) inbound="${inboundPreview}" reply="${replyPreview}"`);
+  } catch {
+    // ignore
+  }
   if (/all models failed/i.test(replyBody) || /^⚠️/i.test(replyBody)) {
     return { skipped: true, reason: 'blocked-provider-error-text' };
   }

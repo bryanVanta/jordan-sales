@@ -9,6 +9,7 @@ const { db } = require('../config/firebase');
 const resendService = require('../services/resendService');
 const { processInboundAutoReply } = require('../services/autoReplyService');
 const { maybeStoreInboundMedia } = require('../services/mediaStorageService');
+const { transcribeAudioUrl } = require('../services/elevenLabsSttService');
 
 /**
  * POST /api/webhooks/inbound-email
@@ -554,21 +555,84 @@ router.post('/inbound-whatsapp', async (req, res) => {
       console.warn('[Webhook] Failed mirroring inbound WhatsApp into outreach_history:', mirrorError.message);
     }
 
+    const storedMediaList = normalizeMediaList(storedMedia || media);
+    const audioItem =
+      storedMediaList.find((m) => String(m?.kind || '').toLowerCase() === 'audio') ||
+      (String(media?.kind || '').toLowerCase() === 'audio' ? media : null);
+
     const isVoiceWithoutTranscript =
-      Boolean(media) && !transcript && /^\[media\]$/i.test(String(resolvedBody || '').trim());
+      Boolean(audioItem) && !transcript && /^\[media\]$/i.test(String(resolvedBody || '').trim());
 
     if (leadId) {
       if (isVoiceWithoutTranscript) {
-        db.collection('leads')
-          .doc(leadId)
-          .update({
-            needsHumanReply: true,
-            lastInboundAt: new Date(),
-            lastInboundChannel: 'whatsapp',
-          })
-          .catch(() => {});
+        // Queue STT in the background (don't block webhook response). If STT succeeds, we can auto-reply
+        // using the transcript; otherwise we keep the "needsHumanReply" flag.
+        db.collection('leads').doc(leadId).update({ needsHumanReply: true, lastInboundAt: new Date(), lastInboundChannel: 'whatsapp' }).catch(() => {});
 
-        console.log(`[Webhook] Voice note received without transcript; skipped AI auto-reply for lead ${leadId}`);
+        setImmediate(async () => {
+          try {
+            const audioUrl = String(audioItem?.url || '').trim();
+            if (!audioUrl) return;
+
+            const stt = await transcribeAudioUrl({
+              audioUrl,
+              fileName: audioItem?.fileName || 'voice-note.ogg',
+              mimeType: audioItem?.mimeType || 'audio/ogg',
+              languageCode: null,
+              diarize: false,
+              tagAudioEvents: true,
+            });
+            const transcriptText = String(stt?.text || '').trim();
+            if (!transcriptText) {
+              console.log(`[Webhook] Voice note STT failed/empty for lead ${leadId}: ${stt?.error || 'empty'}`);
+              return;
+            }
+
+            console.log(`[Webhook] Voice note STT ok for lead ${leadId}: ${transcriptText.slice(0, 80)}`);
+
+            // Patch inbound_whatsapp + outreach_history mirrors with transcript so UI can display it.
+            await inboundRecord.update({ transcript: transcriptText, content: transcriptText, updatedAt: new Date() }).catch(() => {});
+            try {
+              const outreachRef = db.collection('outreach_history');
+              const mirror = await outreachRef.where('messageId', '==', messageId || '').limit(1).get();
+              if (!mirror.empty) {
+                await mirror.docs[0].ref.update({
+                  transcript: transcriptText,
+                  messageContent: transcriptText,
+                  messagePreview: transcriptText.substring(0, 200),
+                  updatedAt: new Date(),
+                });
+              }
+            } catch {
+              // ignore mirror patch
+            }
+
+            // Now that we have transcript, run auto-reply.
+            db.collection('leads').doc(leadId).update({ aiTyping: true, aiTypingStartedAt: new Date() }).catch(() => {});
+            processInboundAutoReply({
+              leadId,
+              channel: 'whatsapp',
+              inboundMessage: transcriptText,
+              sender: from,
+              inboundMessageId: messageId || '',
+            })
+              .then((result) => {
+                if (result?.skipped) {
+                  console.log(`[Webhook] WhatsApp auto-reply skipped for lead ${leadId}: ${result.reason}`);
+                } else {
+                  console.log(`[Webhook] WhatsApp auto-reply sent for lead ${leadId}`);
+                }
+              })
+              .catch((err) => console.error(`[Webhook] Error running WhatsApp auto-reply (post-STT):`, err.message))
+              .finally(() => {
+                db.collection('leads').doc(leadId).update({ aiTyping: false, needsHumanReply: false }).catch(() => {});
+              });
+          } catch (err) {
+            console.warn('[Webhook] Voice note STT background task failed:', err?.message || String(err));
+          }
+        });
+
+        console.log(`[Webhook] Voice note received without transcript; queued STT for lead ${leadId}`);
       } else {
         // Signal to the chat UI that the AI is composing a reply.
         db.collection('leads').doc(leadId).update({ aiTyping: true, aiTypingStartedAt: new Date() })

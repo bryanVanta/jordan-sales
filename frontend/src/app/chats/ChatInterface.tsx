@@ -20,7 +20,8 @@ import {
   Navigation,
   CheckCheck,
   Loader2,
-  Bot
+  Bot,
+  X
 } from "lucide-react";
 import { fetchCompleteConversationByLeadId, formatTime } from "@/services/outreach";
 import { db } from "@/lib/firebase";
@@ -34,7 +35,53 @@ interface Message {
   text: string;
   time: string;
   timestampMs?: number; // For sentiment + accurate ordering
+  media?: MediaAttachment[];
+  transcript?: string | null;
 }
+
+type MediaAttachment = {
+  kind?: 'image' | 'audio' | 'unknown' | string;
+  url?: string;
+  mimeType?: string;
+  fileName?: string;
+  durationMs?: number;
+  isVoiceNote?: boolean;
+  caption?: string;
+  transcript?: string;
+  provider?: string;
+  originalUrl?: string;
+};
+
+type PendingImageAttachment = {
+  kind: 'image';
+  url: string;
+  mimeType: string;
+  fileName: string;
+  size?: number;
+};
+
+const normalizeMediaList = (input: any): MediaAttachment[] => {
+  if (!input) return [];
+  if (Array.isArray(input)) return input.filter(Boolean);
+  if (typeof input === 'object') return [input];
+  return [];
+};
+
+const isMediaPlaceholderText = (value: string) => {
+  const v = String(value || '').trim();
+  if (!v) return false;
+  return /^<\s*media\s*:\s*(image|audio)\s*>$/i.test(v) || /^\[media\]$/i.test(v);
+};
+
+const describeMedia = (media: MediaAttachment[]) => {
+  const kinds = new Set(media.map((m) => String(m?.kind || '').toLowerCase()).filter(Boolean));
+  if (kinds.has('image')) return '[Image]';
+  if (kinds.has('audio')) return '[Voice message]';
+  return '[Media]';
+};
+
+const mediaHasRenderableUrl = (media: MediaAttachment[] | undefined) =>
+  Array.isArray(media) && media.some((m) => Boolean(String(m?.url || '').trim()));
 
 const normalizeSentiment = (value: any): 'hot' | 'warm' | 'neutral' | 'cold' | null => {
   const v = String(value || '').trim().toLowerCase();
@@ -241,13 +288,35 @@ const ChatInterface = () => {
   const [sentimentCounts, setSentimentCounts] = useState({ hot: 0, warm: 0, neutral: 0, cold: 0 });
   const [selectedChannel, setSelectedChannel] = useState<'email' | 'whatsapp' | 'telegram'>(platformFromUrl);
   const [togglingReplyMode, setTogglingReplyMode] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<PendingImageAttachment | null>(null);
 
   const currentCustomer = allCustomers.find(c => c.id === selectedCustomerId) || allCustomers[0];
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
   const leadRealtimeStateRef = useRef(new Map<string, { manualReplyMode: boolean; aiTyping: boolean; sentiment?: any }>());
+
+  const handleImageSelected = (file: File | undefined | null) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = typeof reader.result === 'string' ? reader.result : '';
+      if (!url) return;
+      setSelectedImage({
+        kind: 'image',
+        url,
+        mimeType: file.type || 'image/jpeg',
+        fileName: file.name || 'image',
+        size: file.size,
+      });
+      setShowPlusMenu(false);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const normalizeWhatsAppContact = (value: string) => {
     const trimmed = String(value || "").trim();
@@ -425,16 +494,22 @@ const ChatInterface = () => {
                   .map((msg: any) => {
                     const timestamp = msg.createdAt || msg.timestamp;
                     const sortTime = timestamp instanceof Date ? timestamp.getTime() : 0;
+                    const media = normalizeMediaList(msg.media);
+                    const contentRaw = selectedChannel === 'whatsapp'
+                      ? String(msg.messageContent || '')
+                      : `[${msg.messageSubject || 'Email'}]\n\n${String(msg.messageContent || '')}`;
+                    const content =
+                      isMediaPlaceholderText(contentRaw) && media.length ? '' : contentRaw;
                     return {
                       id: msg.messageId || msg.id,
                       sender: (msg.status === 'received' ? 'user' : 'bot') as 'user' | 'bot',
-                      text: selectedChannel === 'whatsapp'
-                        ? `${msg.messageContent}`
-                        : `[${msg.messageSubject || 'Email'}]\n\n${msg.messageContent}`,
+                      text: content,
                       time: msg.createdAt?.toLocaleTimeString?.([], { hour: '2-digit', minute: '2-digit' })
                         ? msg.createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                         : formatTime(msg.timestamp) || 'Unknown time',
                       timestampMs: sortTime,
+                      media: media.length ? media : undefined,
+                      transcript: msg.transcript ?? null,
                     };
                   })
                   .sort((a, b) => (a.timestampMs || 0) - (b.timestampMs || 0));
@@ -596,17 +671,26 @@ const ChatInterface = () => {
         
         if (conversationMessages && conversationMessages.length > 0) {
           // Convert messages to chat Message format
-          const convertedMessages: Message[] = conversationMessages.map((msg: any) => ({
-            id: msg.messageId || msg.id,
-            sender: msg.status === 'received' ? "user" : "bot" as const,
-            text: selectedChannel === 'whatsapp'
-              ? `${msg.messageContent}`
-              : `[${msg.messageSubject || 'Email'}]\n\n${msg.messageContent}`,
-            time: msg.createdAt?.toDate?.() 
-              ? msg.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-              : formatTime(msg.timestamp) || 'Unknown time',
-            timestampMs: msg.timestamp instanceof Date ? msg.timestamp.getTime() : undefined,
-          }));
+          const convertedMessages: Message[] = conversationMessages.map((msg: any) => {
+            const media = normalizeMediaList(msg.media);
+            const contentRaw = selectedChannel === 'whatsapp'
+              ? String(msg.messageContent || '')
+              : `[${msg.messageSubject || 'Email'}]\n\n${String(msg.messageContent || '')}`;
+            const content =
+              isMediaPlaceholderText(contentRaw) && media.length ? '' : contentRaw;
+
+            return {
+              id: msg.messageId || msg.id,
+              sender: msg.status === 'received' ? "user" : "bot" as const,
+              text: content,
+              time: msg.createdAt?.toDate?.() 
+                ? msg.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : formatTime(msg.timestamp) || 'Unknown time',
+              timestampMs: msg.timestamp instanceof Date ? msg.timestamp.getTime() : undefined,
+              media: media.length ? media : undefined,
+              transcript: msg.transcript ?? null,
+            };
+          });
 
           // Set only conversation messages (replace instead of append to prevent duplicates)
           setAllCustomers(prev => prev.map(c => 
@@ -639,30 +723,52 @@ const ChatInterface = () => {
     setShowPlusMenu(false);
   }, [selectedCustomerId]);
 
-  const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  const scrollToBottom = (behavior: ScrollBehavior = "auto") => {
+    const container = messagesContainerRef.current;
+    if (container) {
+      container.scrollTo({ top: container.scrollHeight, behavior });
+      return;
+    }
+    messagesEndRef.current?.scrollIntoView({ behavior });
   };
 
   useEffect(() => {
-    if (currentCustomer?.messages) {
-      scrollToBottom();
-    }
-  }, [currentCustomer?.messages]);
+    if (!currentCustomer) return;
+    // Avoid window-level scroll jumps from `scrollIntoView` on some layouts by preferring container scroll.
+    // rAF ensures DOM (incl. media) has committed before we compute scrollHeight.
+    requestAnimationFrame(() => scrollToBottom("auto"));
+  }, [selectedCustomerId, currentCustomer?.messages?.length]);
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!inputValue.trim()) return;
+    if (!inputValue.trim() && !selectedImage) return;
     
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const messageText = inputValue;
+    const messageText = inputValue.trim();
+    const pendingMedia = selectedImage ? [{ ...selectedImage }] : [];
+    const optimisticId = Date.now().toString();
     
     // Optimistically add the message to the UI
     setAllCustomers(prev => prev.map(c => 
       c.id === selectedCustomerId 
-        ? { ...c, messages: [...c.messages, { id: Date.now().toString(), sender: "bot", text: messageText, time }] } 
+        ? {
+            ...c,
+            messages: [
+              ...c.messages,
+              {
+                id: optimisticId,
+                sender: "bot",
+                text: messageText,
+                time,
+                media: pendingMedia.length ? pendingMedia : undefined,
+              },
+            ],
+          } 
         : c
     ));
     setInputValue("");
+    setSelectedImage(null);
+    if (imageInputRef.current) imageInputRef.current.value = "";
     
     const isWhatsApp = selectedChannel === 'whatsapp';
     const endpoint = isWhatsApp ? `${API_BASE_URL}/whatsapp/send` : `${API_BASE_URL}/follow-up/send`;
@@ -680,6 +786,7 @@ const ChatInterface = () => {
                 company: currentCustomer.company,
                 message: messageText,
                 whatsapp: currentCustomer.email, // for WhatsApp view, this holds the E.164 contact
+                media: pendingMedia.length ? pendingMedia : undefined,
               }
             : {
                 leadId: currentCustomer.firebaseLeadId || currentCustomer.id, // Use Firebase leadId
@@ -698,9 +805,10 @@ const ChatInterface = () => {
         // Remove the message if sending failed
         setAllCustomers(prev => prev.map(c =>
           c.id === selectedCustomerId
-            ? { ...c, messages: c.messages.slice(0, -1) }
+            ? { ...c, messages: c.messages.filter((m) => m.id !== optimisticId) }
             : c
         ));
+        if (pendingMedia.length) setSelectedImage(pendingMedia[0]);
       } else {
         const result = details || ({} as any);
         console.log('Message sent successfully', result);
@@ -737,9 +845,10 @@ const ChatInterface = () => {
       // Remove the message if sending failed
       setAllCustomers(prev => prev.map(c =>
         c.id === selectedCustomerId
-          ? { ...c, messages: c.messages.slice(0, -1) }
+          ? { ...c, messages: c.messages.filter((m) => m.id !== optimisticId) }
           : c
       ));
+      if (pendingMedia.length) setSelectedImage(pendingMedia[0]);
     } finally {
       setSendingMessage(false);
     }
@@ -807,7 +916,14 @@ const ChatInterface = () => {
               </div>
             ) : allCustomers.length > 0 ? (
               allCustomers.map((customer) => {
-                const lastMsg = customer.messages.length > 0 ? customer.messages[customer.messages.length - 1].text.substring(0, 50) : "No messages";
+                const lastMessage = customer.messages.length > 0 ? customer.messages[customer.messages.length - 1] : null;
+                const lastMsg = !lastMessage
+                  ? "No messages"
+                  : lastMessage.text
+                    ? lastMessage.text.substring(0, 50)
+                    : lastMessage.media?.length
+                      ? describeMedia(lastMessage.media).substring(0, 50)
+                      : "No messages";
                 return (
                   <button 
                     key={customer.id} 
@@ -890,14 +1006,85 @@ const ChatInterface = () => {
           </button>
         </div>
 
-        <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 custom-scrollbar bg-gray-50/20">
+        <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 custom-scrollbar bg-gray-50/20">
           {currentCustomer.messages.map((msg) => (
             <div key={msg.id} className={`flex ${msg.sender === 'bot' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
               <div className={`flex flex-col max-w-[75%] ${msg.sender === 'bot' ? 'items-end' : 'items-start'}`}>
                 <div className={`px-4 py-2.5 rounded-2xl text-[13px] font-bold leading-relaxed shadow-sm ${
                   msg.sender === 'bot' ? "bg-blue-600 text-white rounded-tr-none" : "bg-white border border-gray-100 text-gray-800 rounded-tl-none"
                 }`}>
-                  {msg.text}
+                  {msg.media?.length ? (
+                    <div className="space-y-2">
+                      {msg.media.map((item, idx) => {
+                        const kind = String(item?.kind || '').toLowerCase();
+                        const url = String(item?.url || '').trim();
+                        const mimeType = String(item?.mimeType || '').trim().toLowerCase();
+
+                        if (!url) {
+                          const label =
+                            kind === 'image'
+                              ? 'Image received'
+                              : kind === 'audio'
+                                ? 'Voice message received'
+                                : 'Attachment received';
+                          return (
+                            <div
+                              key={idx}
+                              className={`text-[12px] font-bold ${msg.sender === 'bot' ? 'text-white/90' : 'text-gray-700'}`}
+                            >
+                              {label}
+                              <span className={`${msg.sender === 'bot' ? 'text-white/70' : 'text-gray-500'} font-medium`}>
+                                {' '}
+                                (no URL from gateway)
+                              </span>
+                            </div>
+                          );
+                        }
+
+                        if (kind === 'image' || mimeType.startsWith('image/')) {
+                          return (
+                            <a key={idx} href={url} target="_blank" rel="noreferrer">
+                              <img
+                                src={url}
+                                alt={item?.caption || 'Image'}
+                                className={`max-w-[240px] sm:max-w-[320px] max-h-[360px] object-contain bg-black/5 rounded-xl border ${msg.sender === 'bot' ? 'border-white/20' : 'border-gray-200'} shadow-sm`}
+                                loading="lazy"
+                                onLoad={() => scrollToBottom("auto")}
+                              />
+                            </a>
+                          );
+                        }
+
+                        if (kind === 'audio' || mimeType.startsWith('audio/')) {
+                          return (
+                            <audio
+                              key={idx}
+                              controls
+                              preload="none"
+                              src={url}
+                              className={`w-[240px] sm:w-[320px] ${msg.sender === 'bot' ? 'invert hue-rotate-180' : ''}`}
+                            />
+                          );
+                        }
+
+                        return (
+                          <a
+                            key={idx}
+                            href={url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className={`text-[12px] underline ${msg.sender === 'bot' ? 'text-white/90' : 'text-blue-600'}`}
+                          >
+                            Attachment
+                          </a>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                  {msg.text ? <div className={msg.media?.length ? 'mt-2' : ''}>{msg.text}</div> : null}
+                  {!msg.text && !mediaHasRenderableUrl(msg.media) && msg.media?.length ? (
+                    <div className="sr-only">{describeMedia(msg.media)}</div>
+                  ) : null}
                 </div>
                 <div className="flex items-center gap-1 mt-1 opacity-50 px-1">
                   <span className="text-[9px] font-bold text-gray-400">{msg.time}</span>
@@ -939,8 +1126,7 @@ const ChatInterface = () => {
                     className="hidden" 
                     accept="image/*"
                     onChange={(e) => {
-                      console.log("Image selected:", e.target.files?.[0]);
-                      setShowPlusMenu(false);
+                      handleImageSelected(e.target.files?.[0]);
                     }}
                   />
                   <input 
@@ -969,6 +1155,29 @@ const ChatInterface = () => {
               )}
             </div>
             <div className="flex-1 flex flex-col">
+              {selectedImage ? (
+                <div className="mb-2 flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50/70 p-1.5">
+                  <img
+                    src={selectedImage.url}
+                    alt={selectedImage.fileName || 'Selected image'}
+                    className="h-10 w-10 rounded-lg object-cover bg-white"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[11px] font-black text-gray-800">{selectedImage.fileName || 'Image'}</div>
+                    <div className="text-[9px] font-bold text-blue-500">Ready to send</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedImage(null);
+                      if (imageInputRef.current) imageInputRef.current.value = "";
+                    }}
+                    className="p-1.5 rounded-lg text-gray-400 hover:bg-white hover:text-gray-700 transition-colors"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : null}
               <input 
                 type="text"
                 placeholder="Type your message..."
@@ -982,7 +1191,7 @@ const ChatInterface = () => {
               <button className="p-2 text-gray-300 hover:text-gray-600 transition-colors" disabled={sendingMessage}><Mic size={18} /></button>
               <button 
                 onClick={() => handleSendMessage()}
-                disabled={sendingMessage || !inputValue.trim()}
+                disabled={sendingMessage || (!inputValue.trim() && !selectedImage)}
                 className="p-2.5 bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-200 hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
               >
                 {sendingMessage ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}

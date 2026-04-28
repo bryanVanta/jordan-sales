@@ -4,6 +4,8 @@ backend/.env
 frontend/.env
 frontend/.env.local
 node_modules
+.npm-cache
+.npm-cache/
 .next
 dist
 out

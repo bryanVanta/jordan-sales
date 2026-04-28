@@ -2,19 +2,21 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
 const whatsappService = require('../services/whatsappService');
+const { maybeStoreInboundMedia } = require('../services/mediaStorageService');
 
 /**
  * POST /api/whatsapp/send
  * Send a WhatsApp message to a lead
- * Body: { leadId, company?, message, whatsapp? }
+ * Body: { leadId, company?, message?, whatsapp?, media? }
  */
 router.post('/send', async (req, res) => {
   try {
-    const { leadId, company, message, whatsapp } = req.body || {};
-    const messageText = typeof message === 'string' ? message : String(message ?? '');
+    const { leadId, company, message, whatsapp, media } = req.body || {};
+    const messageText = typeof message === 'string' ? message.trim() : String(message ?? '').trim();
+    const mediaList = Array.isArray(media) ? media.filter(Boolean) : media && typeof media === 'object' ? [media] : [];
 
-    if (!leadId || !messageText.trim()) {
-      return res.status(400).json({ error: 'Missing required fields: leadId, message' });
+    if (!leadId || (!messageText && mediaList.length === 0)) {
+      return res.status(400).json({ error: 'Missing required fields: leadId and message or media' });
     }
 
     const leadDoc = await db.collection('leads').doc(String(leadId)).get();
@@ -33,7 +35,13 @@ router.post('/send', async (req, res) => {
 
     console.log(`[WhatsApp] Sending message to ${contactWhatsApp} for lead ${leadId}`);
 
-    const sendResult = await whatsappService.sendMessage(contactWhatsApp, messageText);
+    const storedMedia = await maybeStoreInboundMedia({ media: mediaList }).catch(() =>
+      mediaList.length === 1 ? mediaList[0] : mediaList.length ? mediaList : null
+    );
+    const storedMediaList = Array.isArray(storedMedia) ? storedMedia : storedMedia ? [storedMedia] : [];
+    const mediaUrls = storedMediaList.map((item) => String(item?.url || '').trim()).filter((url) => /^https?:\/\//i.test(url));
+
+    const sendResult = await whatsappService.sendMessage(contactWhatsApp, messageText || (mediaUrls.length ? ' ' : ''), { mediaUrls });
     if (!sendResult?.success) {
       console.warn('[WhatsApp] Send failed:', sendResult?.error || 'Unknown error', sendResult?.details || '');
     }
@@ -49,7 +57,7 @@ router.post('/send', async (req, res) => {
       channel: 'whatsapp',
       messageSubject: null,
       messageContent: messageText,
-      messagePreview: messageText.substring(0, 200),
+      messagePreview: (messageText || (storedMediaList.length ? '[Image]' : '')).substring(0, 200),
       status: sendResult.success ? 'sent' : 'failed',
       errorMessage: sendResult.error || null,
       errorDetails: sendResult.details || null,
@@ -58,6 +66,7 @@ router.post('/send', async (req, res) => {
       timestamp: new Date(),
       createdAt: new Date(),
       source: (process.env.WHATSAPP_PROVIDER || 'twilio').trim().toLowerCase(),
+      ...(storedMedia ? { media: storedMedia } : {}),
     };
 
     const docRef = await db.collection('outreach_history').add(record);
@@ -78,6 +87,7 @@ router.post('/send', async (req, res) => {
       provider: record.source,
       messageId: sendResult.messageId || null,
       recordId: docRef.id,
+      media: storedMedia || null,
       error: sendResult.success ? null : sendResult.error,
       details: sendResult.success ? null : sendResult.details || null,
     };

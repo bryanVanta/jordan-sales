@@ -210,7 +210,8 @@ async function fetchRecentConversation(leadId) {
 }
 
 async function generateAutoReplyMessage({ lead, channel, conversation, inboundMessage }) {
-  const systemPrompt = (await generateSystemPrompt()) || 'You are a helpful sales assistant for VantaTech.';
+  const productInfoId = String(lead?.productInfoId || '').trim() || null;
+  const systemPrompt = (await generateSystemPrompt(productInfoId)) || 'You are a helpful sales assistant for VantaTech.';
   const conversationText = buildConversationText(conversation);
   const latestInbound = String(inboundMessage || '').trim();
   const companyName = lead.company || 'your company';

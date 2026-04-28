@@ -6,6 +6,7 @@
 
 const axios = require('axios');
 const { getProduct, getAllProducts } = require('./productService');
+const { getProductInfo, CURRENT_DOC_ID, DEFAULT_CUSTOMER_INSTRUCTIONS } = require('./productInfoService');
 const { callAgentWithOpenClawCliViaSsh } = require('./openClawService');
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -15,6 +16,11 @@ const MODEL = 'openai/gpt-oss-120b:free';
 const OPENCLAW_LLM_ENABLED = String(process.env.OPENCLAW_LLM_ENABLED || '1').trim() !== '0';
 const OPENCLAW_LLM_AGENT_ID = (process.env.OPENCLAW_LLM_AGENT_ID || process.env.OPENCLAW_JORDAN_AGENT_ID || 'main').trim();
 const OPENCLAW_LLM_TIMEOUT_MS = Number(process.env.OPENCLAW_LLM_TIMEOUT_MS || 60000);
+const trimPromptSection = (value = '', max = 6000) => {
+  const text = String(value || '').trim();
+  if (!text || text.length <= max) return text;
+  return `${text.slice(0, max).trim()}\n[truncated]`;
+};
 
 /**
  * Generate system prompt from product configuration
@@ -25,40 +31,63 @@ async function generateSystemPrompt(productId = null) {
     let product;
     
     if (productId) {
-      // Get specific product
-      product = await getProduct(productId);
+      // Prefer the active Product-Info project used by the Training page.
+      product = await getProductInfo(productId);
+      if (!product) product = await getProduct(productId);
     } else {
-      // Get first/latest product
-      const products = await getAllProducts();
-      product = products.length > 0 ? products[0] : null;
+      product = await getProductInfo(CURRENT_DOC_ID);
+      if (!product) {
+        const products = await getAllProducts();
+        product = products.length > 0 ? products[0] : null;
+      }
     }
     
     if (!product) {
       return null;
     }
 
-    const systemPrompt = `You are a professional sales assistant focused on quick, compelling pitches.
+    const personalization = product.personalization || {};
+    const trainingAssets = product.trainingAssets || {};
+    const assetKnowledge = [
+      trainingAssets.companyInfo?.extractedText ? `Company Info:\n${trimPromptSection(trainingAssets.companyInfo.extractedText)}` : '',
+      trainingAssets.knowledgeBase?.extractedText ? `Knowledge Base / Product Docs:\n${trimPromptSection(trainingAssets.knowledgeBase.extractedText)}` : '',
+      trainingAssets.salesPlaybook?.extractedText ? `Sales Playbook:\n${trimPromptSection(trainingAssets.salesPlaybook.extractedText)}` : '',
+    ].filter(Boolean).join('\n\n');
+    const customerInstructions = String(
+      personalization.customerInstructions || product.instructions || DEFAULT_CUSTOMER_INSTRUCTIONS
+    ).trim();
+    const characteristics = String(personalization.characteristics || '').trim();
+    const styleAndTone = String(personalization.styleAndTone || 'Default').trim();
+
+    const systemPrompt = `You are Jordan, a professional B2B sales assistant focused on useful, deal-moving sales conversations and collateral.
 
 BEHAVIOR:
 - Keep responses SHORT and punchy (2-3 sentences max)
 - NO markdown symbols, NO asterisks, NO dashes for formatting
 - Be direct and confident
 - Focus on value and urgency
+- Prefer practical, rep-ready language over generic explanations
+
+PERSONALIZATION:
+Style and tone: ${styleAndTone}
+${characteristics ? `Characteristics: ${characteristics}` : 'Characteristics: practical, concise, buyer-outcome focused'}
 
 INSTRUCTIONS:
-${product.instructions}
+${customerInstructions}
 
 PRODUCT:
 Name: ${product.productName || 'N/A'}
 Type: ${product.productType || 'N/A'}
 Description: ${product.description}
+Key Benefit: ${product.keyBenefit || 'N/A'}
+More Context: ${product.moreAboutProduct || 'N/A'}
 
 TARGET CUSTOMER:
 ${product.targetCustomer}
 
 LOCATION: ${product.location}
 
-${product.knowledge ? `KEY INFO:\n${product.knowledge}` : ''}
+${product.knowledge || assetKnowledge ? `KEY INFO:\n${[trimPromptSection(product.knowledge), assetKnowledge].filter(Boolean).join('\n\n')}` : ''}
 
 Respond naturally without any markdown or special formatting.`;
 

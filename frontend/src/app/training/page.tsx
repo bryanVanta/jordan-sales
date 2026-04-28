@@ -29,6 +29,15 @@ type AppleToggleProps = {
 };
 
 const SELECTED_PROJECT_STORAGE_KEY = 'jordan:selectedProjectId';
+const DEFAULT_CUSTOMER_INSTRUCTIONS = `Jordan helps B2B sales teams create functional sales collateral that helps reps close deals, not generic documents that sit unused.
+
+Default behavior:
+- Act like a practical sales-enablement partner for revenue teams, sales leaders, and enablement professionals.
+- Create situation-specific collateral: pitch decks, one-pagers, objection handling, demo scripts, playbooks, follow-up messages, and talk tracks.
+- Keep outputs scannable, rep-friendly, and easy to use in live selling conversations.
+- Connect every product capability to a buyer outcome, business impact, or deal-stage use case.
+- Avoid overly comprehensive generic material. Prioritize what a rep can actually say, send, or do next.
+- Use clear claims, concise proof points, and language sales teams would naturally use with buyers.`;
 
 function TrainingFooterPortal({ handleSaveChanges, handleFindLeads, saveState, findLeadsState, findLeadsProgress }: any) {
   const [isMounted, setIsMounted] = useState(false);
@@ -186,7 +195,7 @@ function TrainingPageInner() {
   const [styleAndTone, setStyleAndTone] = useState('Default');
   const [showToneDropdown, setShowToneDropdown] = useState(false);
   const [characteristics, setCharacteristics] = useState('');
-  const [customerInstructions, setCustomerInstructions] = useState('');
+  const [customerInstructions, setCustomerInstructions] = useState(DEFAULT_CUSTOMER_INSTRUCTIONS);
   const [autoSales, setAutoSales] = useState(false);
   
   const [referenceMemories, setReferenceMemories] = useState(true);
@@ -310,6 +319,14 @@ function TrainingPageInner() {
     targetCustomer,
     location,
     moreAboutProduct,
+    personalization: {
+      styleAndTone,
+      characteristics,
+      customerInstructions,
+      autoSales,
+      referenceMemories,
+      referenceChatHistory,
+    },
     trainingAssets: {
       companyInfo: uploadedFiles['Company Info'] || { fileName: '', mimeType: '', extractedText: '' },
       knowledgeBase: uploadedFiles['Knowledge Base'] || { fileName: '', mimeType: '', extractedText: '' },
@@ -330,6 +347,12 @@ function TrainingPageInner() {
     setTargetCustomer('');
     setLocation('');
     setMoreAboutProduct('');
+    setStyleAndTone('Default');
+    setCharacteristics('');
+    setCustomerInstructions(DEFAULT_CUSTOMER_INSTRUCTIONS);
+    setAutoSales(false);
+    setReferenceMemories(true);
+    setReferenceChatHistory(true);
     setUploadedFiles({});
 
     const loadProductInfo = async () => {
@@ -352,6 +375,12 @@ function TrainingPageInner() {
         setTargetCustomer(data.targetCustomer || '');
         setLocation(data.location || '');
         setMoreAboutProduct(data.moreAboutProduct || '');
+        setStyleAndTone(data.personalization?.styleAndTone || 'Default');
+        setCharacteristics(data.personalization?.characteristics || '');
+        setCustomerInstructions(data.personalization?.customerInstructions || DEFAULT_CUSTOMER_INSTRUCTIONS);
+        setAutoSales(Boolean(data.personalization?.autoSales));
+        setReferenceMemories(data.personalization?.referenceMemories !== false);
+        setReferenceChatHistory(data.personalization?.referenceChatHistory !== false);
         setUploadedFiles({
           'Company Info': data.trainingAssets?.companyInfo || { fileName: '', mimeType: '', extractedText: '' },
           'Knowledge Base': data.trainingAssets?.knowledgeBase || { fileName: '', mimeType: '', extractedText: '' },
@@ -581,15 +610,18 @@ function TrainingPageInner() {
               <div className="space-y-3 pt-2">
                 <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Training Assets</label>
                 {[
-                  { label: 'Company Info', icon: <Briefcase size={16} /> },
-                  { label: 'Knowledge Base', icon: <Database size={16} /> },
-                  { label: 'Sales Playbook', icon: <Terminal size={16} /> }
+                  { label: 'Company Info', hint: 'Upload company profile, positioning, proof points, case studies', icon: <Briefcase size={16} /> },
+                  { label: 'Knowledge Base', hint: 'Upload product brochure, product docs, feature sheets, FAQs', icon: <Database size={16} /> },
+                  { label: 'Sales Playbook', hint: 'Upload pitch framework, ICP, objections, talk tracks', icon: <Terminal size={16} /> }
                 ].map((item) => (
                   <div key={item.label} className="flex flex-col bg-gray-50/50 p-1 rounded-2xl border border-gray-100 group hover:border-blue-200 hover:bg-white transition-all overflow-hidden">
                     <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between px-4 sm:px-5 py-3.5 gap-3">
                       <div className="flex items-center gap-3">
                         <div className="text-gray-400 group-hover:text-blue-600 transition-colors">{item.icon}</div>
-                        <span className="text-[13px] font-bold text-gray-700">{item.label}</span>
+                        <div>
+                          <span className="text-[13px] font-bold text-gray-700">{item.label}</span>
+                          <p className="text-[10px] font-bold text-gray-400 mt-0.5">{item.hint}</p>
+                        </div>
                       </div>
                       <button 
                         onClick={() => triggerUpload(item.label)}
@@ -602,7 +634,12 @@ function TrainingPageInner() {
                        <div className="bg-emerald-50 px-5 py-2.5 flex items-center justify-between border-t border-emerald-100/50">
                           <div className="flex items-center gap-2 truncate">
                              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                             <span className="text-[10px] font-black text-emerald-700 truncate">{uploadedFiles[item.label]?.fileName}</span>
+                             <span className="text-[10px] font-black text-emerald-700 truncate">
+                               {uploadedFiles[item.label]?.fileName}
+                               {uploadedFiles[item.label]?.extractedText
+                                 ? ` · ${uploadedFiles[item.label]?.extractedText?.length || 0} chars extracted`
+                                 : ' · uploaded, no text extracted'}
+                             </span>
                           </div>
                           <button onClick={() => setUploadedFiles(prev => { const n = {...prev}; delete n[item.label]; return n; })} className="text-emerald-500 hover:text-emerald-700"><X size={12} /></button>
                        </div>

@@ -54,6 +54,25 @@ const isHttpUrl = (value) => {
   }
 };
 
+const parseDataUrl = (value) => {
+  const text = String(value || '').trim();
+  const match = text.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
+  if (!match) return null;
+
+  const mimeType = String(match[1] || 'application/octet-stream').trim();
+  const isBase64 = Boolean(match[2]);
+  const data = String(match[3] || '');
+  if (!data) return null;
+
+  try {
+    const buffer = isBase64 ? Buffer.from(data, 'base64') : Buffer.from(decodeURIComponent(data), 'utf8');
+    if (!buffer.length || buffer.length > 20 * 1024 * 1024) return null;
+    return { buffer, mimeType };
+  } catch {
+    return null;
+  }
+};
+
 const isTwilioMediaUrl = (value) => {
   try {
     const url = new URL(String(value || ''));
@@ -178,6 +197,30 @@ const maybeStoreInboundMedia = async ({ media, timeoutMs = 20000 } = {}) => {
       const mimeTypeHint = String(item?.mimeType || item?.mimetype || '').trim();
       const fileNameHint = String(item?.fileName || item?.filename || item?.name || '').trim();
       const kind = inferKindFromMedia(item);
+
+      const dataUrl = parseDataUrl(originalUrl);
+      if (dataUrl) {
+        const mimeType = mimeTypeHint || dataUrl.mimeType || 'application/octet-stream';
+        const uploaded = await withTimeout(
+          uploadBufferToCloudinary({ buffer: dataUrl.buffer, mimeType, fileName: fileNameHint, kind: kind === 'audio' ? 'audio' : 'image' }),
+          timeoutMs,
+          'cloudinary upload'
+        );
+
+        stored.push({
+          ...item,
+          kind: kind === 'audio' ? 'audio' : kind === 'image' ? 'image' : item?.kind || 'unknown',
+          url: uploaded.url,
+          cloudinary: {
+            publicId: uploaded.publicId,
+            bytes: uploaded.bytes,
+            resourceType: uploaded.resourceType,
+          },
+          originalUrl: 'data-url',
+          mimeType,
+        });
+        continue;
+      }
 
       if (!originalUrl || !isHttpUrl(originalUrl)) {
         stored.push(item);

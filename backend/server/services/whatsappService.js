@@ -12,7 +12,7 @@ class WhatsAppService {
     this.client = twilio(process.env.TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN);
   }
 
-  async sendMessage(to, message) {
+  async sendMessage(to, message, options = {}) {
     try {
       if (this.provider === 'openclaw') {
         return await openClawWhatsAppService.sendMessage(to, message);
@@ -27,6 +27,7 @@ class WhatsAppService {
         from,
         to: normalizedTo,
         body: message,
+        ...(Array.isArray(options.mediaUrls) && options.mediaUrls.length ? { mediaUrl: options.mediaUrls.slice(0, 10) } : {}),
       });
 
       console.log(`WhatsApp message sent: ${response.sid}`);

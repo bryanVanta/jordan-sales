@@ -20,7 +20,8 @@ import {
   Navigation,
   CheckCheck,
   Loader2,
-  Bot
+  Bot,
+  X
 } from "lucide-react";
 import { fetchCompleteConversationByLeadId, formatTime } from "@/services/outreach";
 import { db } from "@/lib/firebase";
@@ -49,6 +50,14 @@ type MediaAttachment = {
   transcript?: string;
   provider?: string;
   originalUrl?: string;
+};
+
+type PendingImageAttachment = {
+  kind: 'image';
+  url: string;
+  mimeType: string;
+  fileName: string;
+  size?: number;
 };
 
 const normalizeMediaList = (input: any): MediaAttachment[] => {
@@ -279,6 +288,7 @@ const ChatInterface = () => {
   const [sentimentCounts, setSentimentCounts] = useState({ hot: 0, warm: 0, neutral: 0, cold: 0 });
   const [selectedChannel, setSelectedChannel] = useState<'email' | 'whatsapp' | 'telegram'>(platformFromUrl);
   const [togglingReplyMode, setTogglingReplyMode] = useState(false);
+  const [selectedImage, setSelectedImage] = useState<PendingImageAttachment | null>(null);
 
   const currentCustomer = allCustomers.find(c => c.id === selectedCustomerId) || allCustomers[0];
 
@@ -287,6 +297,26 @@ const ChatInterface = () => {
   const imageInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
   const leadRealtimeStateRef = useRef(new Map<string, { manualReplyMode: boolean; aiTyping: boolean; sentiment?: any }>());
+
+  const handleImageSelected = (file: File | undefined | null) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return;
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const url = typeof reader.result === 'string' ? reader.result : '';
+      if (!url) return;
+      setSelectedImage({
+        kind: 'image',
+        url,
+        mimeType: file.type || 'image/jpeg',
+        fileName: file.name || 'image',
+        size: file.size,
+      });
+      setShowPlusMenu(false);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const normalizeWhatsAppContact = (value: string) => {
     const trimmed = String(value || "").trim();
@@ -711,18 +741,34 @@ const ChatInterface = () => {
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!inputValue.trim()) return;
+    if (!inputValue.trim() && !selectedImage) return;
     
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-    const messageText = inputValue;
+    const messageText = inputValue.trim();
+    const pendingMedia = selectedImage ? [{ ...selectedImage }] : [];
+    const optimisticId = Date.now().toString();
     
     // Optimistically add the message to the UI
     setAllCustomers(prev => prev.map(c => 
       c.id === selectedCustomerId 
-        ? { ...c, messages: [...c.messages, { id: Date.now().toString(), sender: "bot", text: messageText, time }] } 
+        ? {
+            ...c,
+            messages: [
+              ...c.messages,
+              {
+                id: optimisticId,
+                sender: "bot",
+                text: messageText,
+                time,
+                media: pendingMedia.length ? pendingMedia : undefined,
+              },
+            ],
+          } 
         : c
     ));
     setInputValue("");
+    setSelectedImage(null);
+    if (imageInputRef.current) imageInputRef.current.value = "";
     
     const isWhatsApp = selectedChannel === 'whatsapp';
     const endpoint = isWhatsApp ? `${API_BASE_URL}/whatsapp/send` : `${API_BASE_URL}/follow-up/send`;
@@ -740,6 +786,7 @@ const ChatInterface = () => {
                 company: currentCustomer.company,
                 message: messageText,
                 whatsapp: currentCustomer.email, // for WhatsApp view, this holds the E.164 contact
+                media: pendingMedia.length ? pendingMedia : undefined,
               }
             : {
                 leadId: currentCustomer.firebaseLeadId || currentCustomer.id, // Use Firebase leadId
@@ -758,9 +805,10 @@ const ChatInterface = () => {
         // Remove the message if sending failed
         setAllCustomers(prev => prev.map(c =>
           c.id === selectedCustomerId
-            ? { ...c, messages: c.messages.slice(0, -1) }
+            ? { ...c, messages: c.messages.filter((m) => m.id !== optimisticId) }
             : c
         ));
+        if (pendingMedia.length) setSelectedImage(pendingMedia[0]);
       } else {
         const result = details || ({} as any);
         console.log('Message sent successfully', result);
@@ -797,9 +845,10 @@ const ChatInterface = () => {
       // Remove the message if sending failed
       setAllCustomers(prev => prev.map(c =>
         c.id === selectedCustomerId
-          ? { ...c, messages: c.messages.slice(0, -1) }
+          ? { ...c, messages: c.messages.filter((m) => m.id !== optimisticId) }
           : c
       ));
+      if (pendingMedia.length) setSelectedImage(pendingMedia[0]);
     } finally {
       setSendingMessage(false);
     }
@@ -1077,8 +1126,7 @@ const ChatInterface = () => {
                     className="hidden" 
                     accept="image/*"
                     onChange={(e) => {
-                      console.log("Image selected:", e.target.files?.[0]);
-                      setShowPlusMenu(false);
+                      handleImageSelected(e.target.files?.[0]);
                     }}
                   />
                   <input 
@@ -1107,6 +1155,29 @@ const ChatInterface = () => {
               )}
             </div>
             <div className="flex-1 flex flex-col">
+              {selectedImage ? (
+                <div className="mb-2 flex items-center gap-2 rounded-xl border border-blue-100 bg-blue-50/70 p-1.5">
+                  <img
+                    src={selectedImage.url}
+                    alt={selectedImage.fileName || 'Selected image'}
+                    className="h-10 w-10 rounded-lg object-cover bg-white"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[11px] font-black text-gray-800">{selectedImage.fileName || 'Image'}</div>
+                    <div className="text-[9px] font-bold text-blue-500">Ready to send</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedImage(null);
+                      if (imageInputRef.current) imageInputRef.current.value = "";
+                    }}
+                    className="p-1.5 rounded-lg text-gray-400 hover:bg-white hover:text-gray-700 transition-colors"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : null}
               <input 
                 type="text"
                 placeholder="Type your message..."
@@ -1120,7 +1191,7 @@ const ChatInterface = () => {
               <button className="p-2 text-gray-300 hover:text-gray-600 transition-colors" disabled={sendingMessage}><Mic size={18} /></button>
               <button 
                 onClick={() => handleSendMessage()}
-                disabled={sendingMessage || !inputValue.trim()}
+                disabled={sendingMessage || (!inputValue.trim() && !selectedImage)}
                 className="p-2.5 bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-200 hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
               >
                 {sendingMessage ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}

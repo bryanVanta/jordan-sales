@@ -98,9 +98,18 @@ const coerceBodyFromMessages = (messages: any[] | undefined) => {
 };
 
 type ForwardedMedia =
-  | { kind: 'image'; url?: string; mimeType?: string; fileName?: string; provider?: string; originalUrl?: string }
-  | { kind: 'audio'; url?: string; mimeType?: string; fileName?: string; provider?: string; originalUrl?: string; transcript?: string }
-  | { kind: 'unknown'; url?: string; provider?: string; originalUrl?: string };
+  | { kind: 'image'; url?: string; mimeType?: string; fileName?: string; provider?: string; originalUrl?: string; localPath?: string }
+  | {
+      kind: 'audio';
+      url?: string;
+      mimeType?: string;
+      fileName?: string;
+      provider?: string;
+      originalUrl?: string;
+      transcript?: string;
+      localPath?: string;
+    }
+  | { kind: 'unknown'; url?: string; provider?: string; originalUrl?: string; localPath?: string };
 
 const isHttpUrl = (v: unknown) => /^https?:\/\//i.test(String(v || '').trim());
 
@@ -120,35 +129,115 @@ const extractMedia = (event: OpenClawHookEvent, bodyText: string): ForwardedMedi
   const meta = event?.context?.metadata || {};
   const placeholderKind = getPlaceholderKind(bodyText);
 
-  const urlsRaw =
-    meta.MediaUrls ?? meta.mediaUrls ?? meta.media_urls ?? meta.MediaUrl ?? meta.mediaUrl ?? meta.media_url ?? undefined;
-  const typesRaw =
-    meta.MediaTypes ?? meta.mediaTypes ?? meta.media_types ?? meta.MediaType ?? meta.mediaType ?? meta.mimeType ?? meta.mimetype ?? undefined;
-  const namesRaw = meta.MediaNames ?? meta.mediaNames ?? meta.filenames ?? meta.fileNames ?? undefined;
-
-  const urls = Array.isArray(urlsRaw) ? urlsRaw : typeof urlsRaw === 'string' ? [urlsRaw] : [];
-  const types = Array.isArray(typesRaw) ? typesRaw : typeof typesRaw === 'string' ? [typesRaw] : [];
-  const names = Array.isArray(namesRaw) ? namesRaw : typeof namesRaw === 'string' ? [namesRaw] : [];
-
-  const count = Math.min(10, Math.max(urls.length, types.length, names.length));
-  const out: ForwardedMedia[] = [];
-  for (let i = 0; i < count; i++) {
-    const url = String(urls[i] || '').trim();
-    const mimeType = String(types[i] || '').trim();
-    const fileName = String(names[i] || '').trim();
+  const coerceObjToMedia = (obj: any): ForwardedMedia | null => {
+    if (!obj || typeof obj !== 'object') return null;
+    const url = String(obj.url || obj.href || obj.src || obj.mediaUrl || obj.MediaUrl || '').trim();
+    const mimeTypeRaw = String(obj.mimeType || obj.mimetype || obj.type || obj.mediaType || obj.MediaType || '').trim();
+    const fileName = String(obj.fileName || obj.filename || obj.name || obj.MediaName || '').trim();
+    const localPath = String(obj.path || obj.localPath || obj.filePath || obj.MediaPath || '').trim();
+    const inferMimeFromName = (name: string) => {
+      const n = String(name || '').trim().toLowerCase();
+      if (!n) return '';
+      if (n.endsWith('.jpg') || n.endsWith('.jpeg')) return 'image/jpeg';
+      if (n.endsWith('.png')) return 'image/png';
+      if (n.endsWith('.webp')) return 'image/webp';
+      if (n.endsWith('.gif')) return 'image/gif';
+      if (n.endsWith('.heic')) return 'image/heic';
+      if (n.endsWith('.heif')) return 'image/heif';
+      if (n.endsWith('.ogg')) return 'audio/ogg';
+      if (n.endsWith('.opus')) return 'audio/opus';
+      if (n.endsWith('.mp3')) return 'audio/mpeg';
+      if (n.endsWith('.wav')) return 'audio/wav';
+      if (n.endsWith('.m4a')) return 'audio/mp4';
+      if (n.endsWith('.aac')) return 'audio/aac';
+      if (n.endsWith('.mp4')) return 'video/mp4';
+      if (n.endsWith('.webm')) return 'video/webm';
+      return '';
+    };
+    const mimeType = mimeTypeRaw || inferMimeFromName(fileName) || inferMimeFromName(localPath);
     const kind =
       placeholderKind === 'image'
         ? 'image'
         : placeholderKind === 'audio'
           ? 'audio'
           : guessKindFromMime(mimeType);
-    if (!url && !mimeType && !fileName) continue;
+    if (!url && !localPath && !mimeType && !fileName) return null;
+    return {
+      kind: kind as any,
+      url: url && isHttpUrl(url) ? url : undefined,
+      mimeType: mimeType || undefined,
+      fileName: fileName || undefined,
+      provider: 'openclaw',
+      ...(localPath ? ({ localPath } as any) : {}),
+    } as any;
+  };
+
+  // Some payloads include message objects with embedded media arrays.
+  const msgsRaw = (event as any)?.messages;
+  if (Array.isArray(msgsRaw) && msgsRaw.length) {
+    const out: ForwardedMedia[] = [];
+    for (const m of msgsRaw.slice(0, 10)) {
+      if (!m || typeof m !== 'object') continue;
+      const embedded = (m as any).media || (m as any).attachments || (m as any).files || null;
+      if (Array.isArray(embedded)) {
+        for (const obj of embedded.slice(0, 10)) {
+          const item = coerceObjToMedia(obj);
+          if (item) out.push(item);
+        }
+      } else {
+        const item = coerceObjToMedia(m);
+        if (item) out.push(item);
+      }
+    }
+    if (out.length) return out;
+  }
+
+  // Some OpenClaw versions may emit different shapes (arrays of objects, local paths, etc).
+  // Best-effort: accept common variants so caption+image messages still carry attachments.
+  const objectsRaw =
+    meta.Media ?? meta.media ?? meta.attachments ?? meta.Attachment ?? meta.attachment ?? meta.files ?? meta.Files ?? undefined;
+  if (Array.isArray(objectsRaw) && objectsRaw.length) {
+    const out: ForwardedMedia[] = [];
+    for (const obj of objectsRaw.slice(0, 10)) {
+      const item = coerceObjToMedia(obj);
+      if (item) out.push(item);
+    }
+    if (out.length) return out;
+  }
+
+  const urlsRaw =
+    meta.MediaUrls ?? meta.mediaUrls ?? meta.media_urls ?? meta.MediaUrl ?? meta.mediaUrl ?? meta.media_url ?? undefined;
+  const typesRaw =
+    meta.MediaTypes ?? meta.mediaTypes ?? meta.media_types ?? meta.MediaType ?? meta.mediaType ?? meta.mimeType ?? meta.mimetype ?? undefined;
+  const namesRaw = meta.MediaNames ?? meta.mediaNames ?? meta.filenames ?? meta.fileNames ?? undefined;
+  const pathsRaw = meta.MediaPaths ?? meta.mediaPaths ?? meta.media_paths ?? meta.MediaPath ?? meta.mediaPath ?? meta.media_path ?? undefined;
+
+  const urls = Array.isArray(urlsRaw) ? urlsRaw : typeof urlsRaw === 'string' ? [urlsRaw] : [];
+  const types = Array.isArray(typesRaw) ? typesRaw : typeof typesRaw === 'string' ? [typesRaw] : [];
+  const names = Array.isArray(namesRaw) ? namesRaw : typeof namesRaw === 'string' ? [namesRaw] : [];
+  const paths = Array.isArray(pathsRaw) ? pathsRaw : typeof pathsRaw === 'string' ? [pathsRaw] : [];
+
+  const count = Math.min(10, Math.max(urls.length, types.length, names.length, paths.length));
+  const out: ForwardedMedia[] = [];
+  for (let i = 0; i < count; i++) {
+    const url = String(urls[i] || '').trim();
+    const mimeType = String(types[i] || '').trim();
+    const fileName = String(names[i] || '').trim();
+    const localPath = String(paths[i] || '').trim();
+    const kind =
+      placeholderKind === 'image'
+        ? 'image'
+        : placeholderKind === 'audio'
+          ? 'audio'
+          : guessKindFromMime(mimeType);
+    if (!url && !localPath && !mimeType && !fileName) continue;
     out.push({
       kind: kind as any,
       url: url && isHttpUrl(url) ? url : undefined,
       mimeType: mimeType || undefined,
       fileName: fileName || undefined,
       provider: 'openclaw',
+      ...(localPath ? ({ localPath } as any) : {}),
     } as any);
   }
 
@@ -257,7 +346,7 @@ const extToMime = (ext: string) => {
   return 'application/octet-stream';
 };
 
-const findLatestInboundFile = async (kind: 'image' | 'audio') => {
+const findLatestInboundFile = async (kind: 'image' | 'audio', opts?: { maxAgeMs?: number; notBeforeMs?: number }) => {
   // Some OpenClaw runtimes run hooks in an ESM-ish sandbox where `require` is unavailable.
   // Dynamic import works in Node ESM and keeps this hook self-contained.
   const fs = await (async () => {
@@ -290,7 +379,8 @@ const findLatestInboundFile = async (kind: 'image' | 'audio') => {
       : new Set(['.ogg', '.opus', '.mp3', '.wav', '.m4a', '.aac', '.mp4', '.webm']);
 
   const nowMs = Date.now();
-  const maxAgeMs = 60_000;
+  const maxAgeMs = Number(opts?.maxAgeMs || 60_000);
+  const notBeforeMs = Number(opts?.notBeforeMs || 0);
   let best: { fullPath: string; name: string; mtimeMs: number } | null = null;
 
   for (const dir of getInboundDirCandidates()) {
@@ -310,6 +400,7 @@ const findLatestInboundFile = async (kind: 'image' | 'audio') => {
         }
         const mtimeMs = Number(stat?.mtimeMs || 0);
         if (!Number.isFinite(mtimeMs) || mtimeMs <= 0) continue;
+        if (notBeforeMs && mtimeMs < notBeforeMs) continue;
         if (nowMs - mtimeMs > maxAgeMs) continue;
         if (!best || mtimeMs > best.mtimeMs) best = { fullPath, name, mtimeMs };
       }
@@ -321,6 +412,24 @@ const findLatestInboundFile = async (kind: 'image' | 'audio') => {
   if (!best) return null;
   const ext = String(pathMod.extname(best.name) || '').toLowerCase();
   return { path: best.fullPath, fileName: best.name, mimeType: extToMime(ext) };
+};
+
+const sleepMs = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const waitForLatestInboundFile = async (
+  kind: 'image' | 'audio',
+  opts?: { maxAgeMs?: number; notBeforeMs?: number; timeoutMs?: number; intervalMs?: number }
+) => {
+  const timeoutMs = Math.max(0, Number(opts?.timeoutMs || 0));
+  const intervalMs = Math.max(100, Number(opts?.intervalMs || 400));
+  const deadline = Date.now() + timeoutMs;
+
+  while (true) {
+    const found = await findLatestInboundFile(kind, { maxAgeMs: opts?.maxAgeMs, notBeforeMs: opts?.notBeforeMs });
+    if (found) return found;
+    if (!timeoutMs || Date.now() >= deadline) return null;
+    await sleepMs(Math.min(intervalMs, Math.max(0, deadline - Date.now())));
+  }
 };
 
 const cloudinarySignature = async (params: Record<string, string | number>, apiSecret: string) => {
@@ -383,6 +492,7 @@ const uploadBase64ToCloudinary = async ({
 
 const handler = async (event: OpenClawHookEvent) => {
   try {
+    const hookStartMs = Date.now();
     const debug = cfg('WHATSAPP_FORWARDER_DEBUG') === '1';
 
     const eventType = String((event as any)?.type || '').trim().toLowerCase();
@@ -453,10 +563,59 @@ const handler = async (event: OpenClawHookEvent) => {
         ) || ''
       ).trim() || coerceBodyFromMessages(event?.messages);
 
+    const meta = (event as any)?.context?.metadata || {};
     const transcript = pickFirstString((event as any)?.transcript, (event as any)?.context?.metadata?.transcript);
     let media = extractMedia(event, bodyText);
     if (transcript) {
       media = media.map((m) => ((m as any).kind === 'audio' ? ({ ...(m as any), transcript } as any) : m));
+    }
+
+    const metaSuggestsAttachment = (value: any) => {
+      if (!value || typeof value !== 'object') return false;
+      const keys = Object.keys(value);
+      return keys.some((k) => /(media|file|mime|attachment|image|audio|video|document|sticker)/i.test(String(k)));
+    };
+
+    // Captioned image messages sometimes include text but omit MediaUrls in the event.
+    // If metadata hints an attachment but `extractMedia` returned nothing, fall back to a recent inbound file.
+    if (cloudinaryEnabled() && media.length === 0 && metaSuggestsAttachment(meta)) {
+      const foundImage = await findLatestInboundFile('image', { maxAgeMs: 15_000 });
+      const foundAudio = foundImage ? null : await findLatestInboundFile('audio', { maxAgeMs: 15_000 });
+      const found = foundImage || foundAudio;
+      if (found) {
+        media = [
+          {
+            kind: foundImage ? 'image' : 'audio',
+            provider: 'openclaw',
+            localPath: found.path,
+            fileName: found.fileName,
+            mimeType: found.mimeType,
+          } as any,
+        ];
+      }
+    }
+
+    // Some WhatsApp/OpenClaw payloads for captioned images contain only the caption text:
+    // { from, to, body, messageId, timestamp } with no media metadata at all.
+    // Use a very tight image-only window so normal text messages are unlikely to inherit stale media.
+    if (cloudinaryEnabled() && media.length === 0 && bodyText && !getPlaceholderKind(bodyText)) {
+      const foundImage = await waitForLatestInboundFile('image', {
+        maxAgeMs: 30_000,
+        notBeforeMs: hookStartMs - 3_000,
+        timeoutMs: 5_000,
+        intervalMs: 500,
+      });
+      if (foundImage) {
+        media = [
+          {
+            kind: 'image',
+            provider: 'openclaw',
+            localPath: foundImage.path,
+            fileName: foundImage.fileName,
+            mimeType: foundImage.mimeType,
+          } as any,
+        ];
+      }
     }
 
     // If OpenClaw emits only a placeholder (<media:...>) but it *did* write the actual file to disk,
@@ -488,7 +647,6 @@ const handler = async (event: OpenClawHookEvent) => {
     }
 
     if (debug) {
-      const meta = (event as any)?.context?.metadata || {};
       const metaKeys = meta && typeof meta === 'object' ? Object.keys(meta).slice(0, 40) : [];
       console.log('[whatsapp-forwarder] debug', {
         type: eventType,
@@ -546,10 +704,9 @@ const handler = async (event: OpenClawHookEvent) => {
     }
 
     // If OpenClaw stores media on disk but doesn't include MediaUrls/MediaPaths in the hook payload,
-    // try a best-effort "latest file in inbound dir" lookup when the body is a <media:...> placeholder.
+    // try a best-effort "latest file in inbound dir" lookup for any attachment-like item missing a URL.
     // This is intentionally bounded and only runs when we have Cloudinary enabled.
-    const placeholderKind = getPlaceholderKind(bodyText);
-    if (cloudinaryEnabled() && placeholderKind && media.length) {
+    if (cloudinaryEnabled() && media.length) {
       for (const item of media) {
         const kind = (item as any).kind === 'audio' ? 'audio' : (item as any).kind === 'image' ? 'image' : null;
         if (!kind) continue;

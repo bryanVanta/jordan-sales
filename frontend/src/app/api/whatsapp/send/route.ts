@@ -5,6 +5,7 @@ type WhatsAppSendBody = {
   company?: string;
   message?: string;
   whatsapp?: string;
+  media?: unknown;
 };
 
 export async function POST(req: Request) {

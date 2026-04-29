@@ -72,6 +72,8 @@ const extractCompanyChain = (companyName = '') => {
   return (baseMatch ? baseMatch[1] : companyName).trim().toLowerCase();
 };
 
+const normalizeAlnum = (value = '') => String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
 const dedupeByCompanyChain = (items = []) => {
   const seen = new Set();
   const filtered = items.filter((item) => {
@@ -93,12 +95,12 @@ const dedupeByCompanyChain = (items = []) => {
 
 const extractWhatsAppNumber = (whatsappLink = '') => {
   // Extract phone number from wa.me link: https://wa.me/1234567890
-  const match = whatsappLink.match(/wa\.me\/(\d+)/);
-  if (match) return match[1];
+  const match = whatsappLink.match(/wa\.me\/(\+?\d[\d\s.-]{7,})/i);
+  if (match) return normalizePhoneNumber(match[1]);
   
   // Extract from direct WhatsApp URL
-  const match2 = whatsappLink.match(/phone[=\/](\d+)/);
-  if (match2) return match2[1];
+  const match2 = whatsappLink.match(/phone[=\/](\+?\d[\d\s.-]{7,})/i);
+  if (match2) return normalizePhoneNumber(match2[1]);
   
   return '';
 };
@@ -110,26 +112,29 @@ const detectPreferredChannel = ({ emails = [], phones = [], whatsapp = '' }) => 
   return 'Email';
 };
 
-// Validate phone number format (Malaysian +60/0xx, US +1, etc)
+const normalizePhoneNumber = (phone = '') => {
+  const raw = String(phone || '').trim();
+  const digitsOnly = raw.replace(/\D/g, '');
+  if (!digitsOnly) return '';
+  if (raw.trim().startsWith('+')) return `+${digitsOnly}`;
+  return digitsOnly;
+};
+
+// Validate phone number format.
+// Keep this international enough for non-Malaysia leads (e.g. +86...), but still reject common date/id noise.
 const isValidPhoneNumber = (phone) => {
   if (!phone) return false;
-  
-  const digitsOnly = phone.replace(/\D/g, '');
+
+  const raw = String(phone || '').trim();
+  const digitsOnly = raw.replace(/\D/g, '');
   
   // Must have 8-15 digits
   if (digitsOnly.length < 8 || digitsOnly.length > 15) return false;
-  
-  // Must START with valid country/area code (REQUIRED, not optional)
-  // Malaysia: 60xx or 0x, US: 1xxx
-  const startPattern = /^(60|0[0-9]|1[0-9])/.test(digitsOnly);
-  if (!startPattern) return false;
-  
-  // Reject if starts with 20-29 AFTER country/area processing
-  if (digitsOnly.startsWith('20') || digitsOnly.startsWith('21') || digitsOnly.startsWith('22') || 
-      digitsOnly.startsWith('23') || digitsOnly.startsWith('24') || digitsOnly.startsWith('25') ||
-      digitsOnly.startsWith('26') || digitsOnly.startsWith('27') || digitsOnly.startsWith('28') || digitsOnly.startsWith('29')) {
-    return false;
-  }
+
+  // Reject obvious dates/timestamps and ranges: 2025-04-01, 20240401, 2024/04/01.
+  if (/^\d{4}[-/.]\d{1,2}[-/.]\d{1,2}$/.test(raw)) return false;
+  if (/^(19|20)\d{6}$/.test(digitsOnly)) return false;
+  if (/^(19|20)\d{10,}$/.test(digitsOnly) && !raw.startsWith('+')) return false;
   
   // Reject if all same digit (111111, 000000, etc)
   if (/^(\d)\1{5,}$/.test(digitsOnly)) return false;
@@ -137,7 +142,15 @@ const isValidPhoneNumber = (phone) => {
   // Reject if looks like sequential numbers (123456, 987654, etc)
   if (/^(01234|12345|23456|34567|45678|56789|67890|98765|87654|76543)/.test(digitsOnly)) return false;
   
-  return true;
+  // Local Malaysia formats are valid.
+  if (/^(60|0[0-9])/.test(digitsOnly)) return true;
+
+  // Explicit international numbers are valid if length is E.164-ish.
+  if (raw.startsWith('+')) return true;
+
+  // Bare international-looking numbers from pages are valid too (e.g. 8613616574884).
+  // Reject bare US-style 10 digit numbers only if they start with 0/1 rules above didn't catch? no-op.
+  return digitsOnly.length >= 10;
 };
 
 // ---------------------------------------------------------------------------
@@ -244,8 +257,8 @@ async function extractPageContacts(page, url, companyName = '', location = '') {
 
       return {
         emails: sortedEmails,
-        phones: cleanPhones,
-        whatsappPhones: cleanWhatsAppPhones,
+        phones: cleanPhones.map((phone) => phone.replace(/[^\d+]/g, '').replace(/(?!^)\+/g, '')),
+        whatsappPhones: cleanWhatsAppPhones.map((phone) => phone.replace(/[^\d+]/g, '').replace(/(?!^)\+/g, '')),
         whatsappLinks: [...new Set(whatsappLinks)].slice(0, 3),
         socialLinks: [...new Set(socialLinks)].slice(0, 5),
       };
@@ -384,7 +397,7 @@ async function searchContactInfoViaSerpAPI(companyName, location) {
           );
           
           // Prefer results with official domains (company name in domain)
-          const companyNameInDomain = urlLower.includes(companyName.replace(/\s+/g, '').toLowerCase());
+          const companyNameInDomain = normalizeAlnum(urlLower).includes(normalizeAlnum(companyName));
           
           const page = await browser.newPage({
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -431,7 +444,7 @@ async function searchContactInfoViaSerpAPI(companyName, location) {
       if (browser) await browser.close().catch(() => {});
     }
 
-    const uniquePhones = [...new Set(allPhones.map(p => p.trim()))].filter(p => p.length > 0);
+    const uniquePhones = [...new Set(allPhones.map(p => normalizePhoneNumber(p)))].filter(p => p.length > 0);
     const uniqueEmails = [...new Set(allEmails.map(e => e.toLowerCase().trim()))].filter(e => e.length > 0);
 
     console.log(`[SerpAPI] Extracted ${uniquePhones.length} phone(s) and ${uniqueEmails.length} email(s)`);
@@ -588,9 +601,11 @@ async function findLeadsFromProductInfo(productInfo, offset = 0) {
 
       const emails = [...new Set([candidate.email, ...scraped.emails, ...searchResults.emails].filter(Boolean))];
       const whatsappNumbers = [...new Set([...scraped.whatsappPhones])]
-        .filter(phone => isValidPhoneNumber(phone)); // Validate WhatsApp numbers
+        .filter(phone => isValidPhoneNumber(phone))
+        .map(phone => normalizePhoneNumber(phone)); // Validate WhatsApp numbers
       const phones = [...new Set([candidate.phone, ...scraped.phones, ...searchResults.phones].filter(Boolean))]
-        .filter(phone => isValidPhoneNumber(phone)); // Validate ALL phones including from OpenClaw
+        .filter(phone => isValidPhoneNumber(phone))
+        .map(phone => normalizePhoneNumber(phone)); // Validate ALL phones including from OpenClaw
       const whatsappLinks = scraped.whatsappLinks || [];
       
       console.log(`[Pipeline] Final contact info: ${emails.length} emails, ${phones.length} valid phones, ${whatsappNumbers.length} whatsapp text numbers, ${whatsappLinks.length} whatsapp links`);

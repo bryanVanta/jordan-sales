@@ -1,4 +1,4 @@
-const { db } = require('../config/firebase');
+const { admin, db } = require('../config/firebase');
 const emailService = require('./emailService');
 const resendService = require('./resendService');
 const whatsappService = require('./whatsappService');
@@ -12,6 +12,21 @@ const AUTO_REPLY_DELAY_MS = 0;
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const DUPLICATE_WINDOW_MS = 2 * 60 * 1000;
 const AUTO_REPLY_ATTEMPT_LOCK_MS = 90 * 1000;
+const WHATSAPP_AUTO_REPLY_QUIET_MS = (() => {
+  const raw = Number(process.env.WHATSAPP_AUTO_REPLY_QUIET_MS || 8000);
+  if (!Number.isFinite(raw) || raw < 0) return 8000;
+  return Math.floor(raw);
+})();
+const WHATSAPP_AUTO_REPLY_BATCH_WINDOW_MS = (() => {
+  const raw = Number(process.env.WHATSAPP_AUTO_REPLY_BATCH_WINDOW_MS || 90 * 1000);
+  if (!Number.isFinite(raw) || raw < 0) return 90 * 1000;
+  return Math.floor(raw);
+})();
+const WHATSAPP_AUTO_REPLY_BATCH_MAX = (() => {
+  const raw = Number(process.env.WHATSAPP_AUTO_REPLY_BATCH_MAX || 6);
+  if (!Number.isFinite(raw) || raw <= 0) return 6;
+  return Math.floor(raw);
+})();
 
 const WHATSAPP_TYPING_MS_PER_WORD = (() => {
   const raw = Number(process.env.WHATSAPP_TYPING_MS_PER_WORD || 80);
@@ -301,6 +316,29 @@ const isRecentSuccessfulDuplicateAutoReply = (lead, fingerprint) => {
   return Date.now() - lastSentAt.getTime() <= DUPLICATE_WINDOW_MS;
 };
 
+const getDateMs = (value) => {
+  const date = value?.toDate?.() || (value ? new Date(value) : null);
+  return date instanceof Date && !Number.isNaN(date.getTime()) ? date.getTime() : 0;
+};
+
+const buildWhatsAppBatchText = (messages = [], fallback = '') => {
+  const texts = (Array.isArray(messages) ? messages : [])
+    .map((message) => String(message?.text || '').trim())
+    .filter(Boolean);
+
+  const uniqueTexts = [];
+  for (const text of texts) {
+    if (!uniqueTexts.includes(text)) uniqueTexts.push(text);
+  }
+
+  if (!uniqueTexts.length) return String(fallback || '').trim();
+  if (uniqueTexts.length === 1) return uniqueTexts[0];
+
+  return `Customer sent these messages quickly, treat them as one turn:\n${uniqueTexts
+    .map((text, index) => `${index + 1}. ${text}`)
+    .join('\n')}`;
+};
+
 async function fetchRecentConversation(leadId) {
   const snapshot = await db
     .collection('outreach_history')
@@ -347,25 +385,36 @@ async function generateAutoReplyMessage({ lead, channel, conversation, inboundMe
 
   // If the inbound is too short (common with 1s voice notes transcribing to "hi"),
   // do not let the LLM hallucinate a random troubleshooting loop.
-  if (channel === 'whatsapp' && (looksLikeGreeting(latestInbound) || looksTooShortToActOn(latestInbound))) {
+  if (
+    channel === 'whatsapp' &&
+    !conversationText.trim() &&
+    (looksLikeGreeting(latestInbound) || looksTooShortToActOn(latestInbound))
+  ) {
     return `Hi! What can I help with? Tell me what happened in one short sentence.`;
   }
 
   const replyRules =
     channel === 'whatsapp'
       ? [
-          'Reply in 1 to 3 short sentences.',
-          'Sound human, helpful, and concise.',
+          'Reply in 1 to 2 short sentences.',
+          'Keep the reply under 45 words unless the customer explicitly asks for a list.',
+          'Sound human, persuasive, helpful, and concise.',
+          'Sell the outcome before the specification: show what gets easier, faster, safer, cheaper, or less painful for the customer.',
+          'Use specs only as a proof point unless the customer directly asks for technical details.',
+          'Avoid dead brochure language. Make the product feel like a better workday, not just a model number.',
           'Do not use email formatting or a subject line.',
           'Do not mention that you are an AI.',
-          'Keep the conversation moving with one simple next-step question when appropriate.',
+          'If the customer is frustrated, answer directly first and do not ask for details they already gave.',
+          'Ask at most one simple next-step question, and only if it is truly needed.',
         ].join('\n')
       : [
           'Reply like a short professional email body.',
           'Use 2 to 4 short paragraphs max.',
           'Do not include a subject line.',
           'Do not mention that you are an AI.',
-          'Keep the tone warm, helpful, and concise.',
+          'Keep the tone warm, persuasive, helpful, and concise.',
+          'Sell the business outcome before the product specification.',
+          'Use specs only as proof unless the customer directly asks for technical details.',
         ].join('\n');
 
   const prompt = `You are replying on behalf of VantaTech to an inbound ${channel} message.
@@ -451,8 +500,10 @@ async function processInboundAutoReply({
   const inboundFingerprint = buildInboundFingerprint({ channel, sender, inboundMessage, inboundMessageId });
 
   // Deduplicate + gate auto-replies with a transaction to avoid race conditions where the same inbound
-  // triggers multiple parallel replies (gateway hooks can emit duplicates).
+  // triggers multiple parallel replies (gateway hooks can emit duplicates). WhatsApp also batches
+  // quick consecutive customer texts into one bot reply.
   const leadRef = db.collection('leads').doc(leadId);
+  const batchToken = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const txnResult = await db.runTransaction(async (txn) => {
     const leadDoc = await txn.get(leadRef);
     if (!leadDoc.exists) return { skipped: true, reason: 'lead-not-found', lead: null };
@@ -481,11 +532,42 @@ async function processInboundAutoReply({
       return { skipped: true, reason: 'manual-reply-mode-enabled', lead };
     }
 
-    // Acquire attempt lock early so concurrent webhook deliveries don't all reply.
-    txn.update(leadRef, {
+    const patch = {
       lastAutoReplyAttemptFingerprint: inboundFingerprint,
       lastAutoReplyAttemptAt: new Date(),
-    });
+    };
+
+    if (channel === 'whatsapp') {
+      const previousBatch = Array.isArray(lead.pendingAutoReplyMessages) ? lead.pendingAutoReplyMessages : [];
+      const previousUpdatedAtMs = getDateMs(lead.pendingAutoReplyUpdatedAt);
+      const canAppend =
+        previousBatch.length > 0 &&
+        previousUpdatedAtMs &&
+        Date.now() - previousUpdatedAtMs <= WHATSAPP_AUTO_REPLY_BATCH_WINDOW_MS;
+      const nextBatchBase = canAppend ? previousBatch : [];
+      const hasSameFingerprint = nextBatchBase.some(
+        (message) => String(message?.fingerprint || '') === String(inboundFingerprint)
+      );
+      const nextBatch = hasSameFingerprint
+        ? nextBatchBase
+        : [
+            ...nextBatchBase,
+            {
+              text: String(inboundMessage || '').trim(),
+              fingerprint: inboundFingerprint,
+              receivedAt: new Date().toISOString(),
+            },
+          ].slice(-WHATSAPP_AUTO_REPLY_BATCH_MAX);
+
+      patch.pendingAutoReplyToken = batchToken;
+      patch.pendingAutoReplyChannel = channel;
+      patch.pendingAutoReplySender = sender || lead.whatsapp || lead.contactWhatsApp || '';
+      patch.pendingAutoReplyMessages = nextBatch;
+      patch.pendingAutoReplyUpdatedAt = new Date();
+    }
+
+    // Acquire attempt lock early so concurrent webhook deliveries don't all reply.
+    txn.update(leadRef, patch);
 
     return { skipped: false, reason: null, lead };
   });
@@ -493,6 +575,14 @@ async function processInboundAutoReply({
   if (txnResult?.skipped) return { skipped: true, reason: txnResult.reason };
   const lead = txnResult?.lead;
   if (!lead) return { skipped: true, reason: 'lead-not-found' };
+
+  if (channel === 'whatsapp' && WHATSAPP_AUTO_REPLY_QUIET_MS > 0) {
+    await wait(WHATSAPP_AUTO_REPLY_QUIET_MS);
+    const latestLead = (await db.collection('leads').doc(leadId).get()).data() || {};
+    if (String(latestLead.pendingAutoReplyToken || '') !== batchToken) {
+      return { skipped: true, reason: 'superseded-by-newer-whatsapp-message' };
+    }
+  }
 
   const sentiment = normalizeSentiment(await triggerSentimentAnalysis(leadId, sender || lead.email || lead.whatsapp || ''));
 
@@ -507,12 +597,21 @@ async function processInboundAutoReply({
     return { skipped: true, reason: 'manual-reply-mode-enabled' };
   }
 
+  let effectiveInboundMessage = inboundMessage;
+  if (channel === 'whatsapp') {
+    const latestLead = (await db.collection('leads').doc(leadId).get()).data() || {};
+    if (String(latestLead.pendingAutoReplyToken || '') !== batchToken) {
+      return { skipped: true, reason: 'superseded-by-newer-whatsapp-message' };
+    }
+    effectiveInboundMessage = buildWhatsAppBatchText(latestLead.pendingAutoReplyMessages, inboundMessage);
+  }
+
   const conversation = await fetchRecentConversation(leadId);
-  const replyBody = await generateAutoReplyMessage({ lead, channel, conversation, inboundMessage, sender });
+  const replyBody = await generateAutoReplyMessage({ lead, channel, conversation, inboundMessage: effectiveInboundMessage, sender });
   if (!replyBody) return { skipped: true, reason: 'empty-reply' };
 
   try {
-    const inboundPreview = String(inboundMessage || '').trim().slice(0, 120);
+    const inboundPreview = String(effectiveInboundMessage || '').trim().slice(0, 120);
     const replyPreview = String(replyBody || '').trim().slice(0, 120);
     console.log(`[AutoReply] Generated (${channel}) inbound="${inboundPreview}" reply="${replyPreview}"`);
   } catch {
@@ -555,6 +654,13 @@ async function processInboundAutoReply({
     await wait(AUTO_REPLY_DELAY_MS);
   }
 
+  if (channel === 'whatsapp') {
+    const latestLead = (await db.collection('leads').doc(leadId).get()).data() || {};
+    if (String(latestLead.pendingAutoReplyToken || '') !== batchToken) {
+      return { skipped: true, reason: 'superseded-by-newer-whatsapp-message' };
+    }
+  }
+
   const sendResult = await sendAutoReply(channel, lead, inboundSubject, replyBody, sender);
   const leadForRecord =
     channel === 'whatsapp'
@@ -587,6 +693,15 @@ async function processInboundAutoReply({
     lastAutoReplySourceAt: new Date(),
     lastAutoReplyAttemptFingerprint: inboundFingerprint,
     lastAutoReplyAttemptAt: new Date(),
+    ...(channel === 'whatsapp'
+      ? {
+          pendingAutoReplyToken: admin.firestore.FieldValue.delete(),
+          pendingAutoReplyChannel: admin.firestore.FieldValue.delete(),
+          pendingAutoReplySender: admin.firestore.FieldValue.delete(),
+          pendingAutoReplyMessages: admin.firestore.FieldValue.delete(),
+          pendingAutoReplyUpdatedAt: admin.firestore.FieldValue.delete(),
+        }
+      : {}),
   });
 
   return {

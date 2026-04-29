@@ -7,7 +7,7 @@ const { db, admin } = require('../config/firebase');
 const { callLLM } = require('./llmService');
 
 // Configurable alert recipient — override with SALES_ALERT_WHATSAPP env var.
-const SALES_ALERT_NUMBER = (process.env.SALES_ALERT_WHATSAPP || '+60142319219').trim();
+const SALES_ALERT_NUMBER = (process.env.SALES_ALERT_WHATSAPP || process.env.SALES_ALERT_NUMBER || '+60142319219').trim();
 
 const sendLeadTemperatureAlert = async ({ companyName, sentiment, leadId, whatsapp }) => {
   try {
@@ -23,11 +23,14 @@ const sendLeadTemperatureAlert = async ({ companyName, sentiment, leadId, whatsa
     const result = await whatsappService.sendMessage(SALES_ALERT_NUMBER, message);
     if (result?.success) {
       console.log(`[Sentiment] Alert sent to ${SALES_ALERT_NUMBER} for lead ${leadId} (${sentiment})`);
+      return result;
     } else {
-      console.warn(`[Sentiment] Alert send failed for lead ${leadId}:`, result?.error);
+      console.warn(`[Sentiment] Alert send failed for lead ${leadId}:`, result?.error, result?.details || '');
+      return result || { success: false, error: 'Unknown alert send failure' };
     }
   } catch (err) {
     console.warn(`[Sentiment] Could not send temperature alert for lead ${leadId}:`, err.message);
+    return { success: false, error: err.message };
   }
 };
 
@@ -226,14 +229,46 @@ const analyzeSingleLead = async (leadId) => {
     console.log(`[Sentiment AI] Updated lead ${leadId}: ${sentiment} (${allMessages.length} messages)`);
 
     // Alert rules:
-    // 1. Sentiment is warm/hot AND no alert has been sent in past 24h (covers all cases including stale leads)
-    // 2. This ensures every time a customer engages and hits warm/hot, you get notified once per day max.
-    const lastAlert = leadData.lastAlertSentAt?.toDate?.() || (leadData.lastAlertSentAt ? new Date(leadData.lastAlertSentAt) : null);
-    const hoursSinceLastAlert = lastAlert ? (Date.now() - lastAlert.getTime()) / (1000 * 60 * 60) : Infinity;
-    const shouldAlert = (sentiment === 'warm' || sentiment === 'hot') && hoursSinceLastAlert >= 24;
+    // 1. Alert on first confirmed transition into warm/hot.
+    // 2. Alert again if it upgrades warm -> hot.
+    // 3. Alert again after 24h only if it is still warm/hot and there was a successful previous alert.
+    // IMPORTANT: only mark alert sent after WhatsApp send succeeds. Failed sends must be retryable.
+    const previousSentiment = String(leadData.sentiment || '').trim().toLowerCase();
+    const isWarmHot = sentiment === 'warm' || sentiment === 'hot';
+    const previousWasWarmHot = previousSentiment === 'warm' || previousSentiment === 'hot';
+    const upgradedToHot = previousSentiment === 'warm' && sentiment === 'hot';
+    const firstWarmHotAlertMissing = !leadData.lastWarmHotAlertSentAt;
+    const lastWarmHotAlert = leadData.lastWarmHotAlertSentAt?.toDate?.() ||
+      (leadData.lastWarmHotAlertSentAt ? new Date(leadData.lastWarmHotAlertSentAt) : null);
+    const hoursSinceWarmHotAlert = lastWarmHotAlert ? (Date.now() - lastWarmHotAlert.getTime()) / (1000 * 60 * 60) : Infinity;
+    const shouldAlert =
+      isWarmHot &&
+      (!previousWasWarmHot || upgradedToHot || firstWarmHotAlertMissing || hoursSinceWarmHotAlert >= 24);
+
     if (shouldAlert) {
-      await db.collection('leads').doc(leadId).update({ lastAlertSentAt: new Date() });
-      sendLeadTemperatureAlert({ companyName, sentiment, leadId, whatsapp: leadData.whatsapp || '' }).catch(() => {});
+      const alertResult = await sendLeadTemperatureAlert({
+        companyName,
+        sentiment,
+        leadId,
+        whatsapp: leadData.whatsapp || leadData.contactWhatsApp || leadData.phone || '',
+      });
+
+      if (alertResult?.success) {
+        await db.collection('leads').doc(leadId).update({
+          lastWarmHotAlertSentAt: new Date(),
+          lastWarmHotAlertSentiment: sentiment,
+          lastWarmHotAlertStatus: 'sent',
+          lastWarmHotAlertError: admin.firestore.FieldValue.delete(),
+          // Keep legacy field for any UI/code still reading it.
+          lastAlertSentAt: new Date(),
+        });
+      } else {
+        await db.collection('leads').doc(leadId).update({
+          lastWarmHotAlertStatus: 'failed',
+          lastWarmHotAlertSentiment: sentiment,
+          lastWarmHotAlertError: alertResult?.error || 'Unknown alert send failure',
+        });
+      }
     }
 
     return sentiment;
@@ -279,7 +314,14 @@ const analyzeBatchSentiment = async () => {
         .limit(1)
         .get();
 
-      const hasMessages = outreachSnapshot.size > 0 || inboundSnapshot.size > 0;
+      const inboundWhatsAppSnapshot = await db
+        .collection('inbound_whatsapp')
+        .where('leadId', '==', leadId)
+        .limit(1)
+        .get()
+        .catch(() => null);
+
+      const hasMessages = outreachSnapshot.size > 0 || inboundSnapshot.size > 0 || Boolean(inboundWhatsAppSnapshot?.size);
 
       if (!hasMessages) {
         // Clear sentiment for leads with no messages

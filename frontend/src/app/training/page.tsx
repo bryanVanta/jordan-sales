@@ -19,7 +19,8 @@ import {
   Plus,
   ChevronRight,
   X,
-  Save
+  Save,
+  Sparkles
 } from 'lucide-react';
 
 type AppleToggleProps = {
@@ -215,11 +216,59 @@ function TrainingPageInner() {
   const [uploadedFiles, setUploadedFiles] = useState<Record<string, { fileName: string; mimeType?: string; extractedText?: string; uploadedAt?: string | null }>>({});
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [findLeadsState, setFindLeadsState] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [refineState, setRefineState] = useState<'idle' | 'loading' | 'error'>('idle');
   const [statusMessage, setStatusMessage] = useState('');
   const [findLeadsProgress, setFindLeadsProgress] = useState<{ current: number; total: number } | null>(null);
 
   const toneOptions = ['Default', 'Professional', 'Casual', 'Enthusiastic', 'Precise', 'Witty', 'Aggressive'];
   const productTypeOptions = ['Service', 'Product', 'Software', 'Consulting', 'Agency', 'Other'];
+
+  const handleRefineCustomerInstructions = async () => {
+    setRefineState('loading');
+    setStatusMessage('Refining customer instructions with AI...');
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/llm/refine-instructions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          productName,
+          productType,
+          description,
+          keyBenefit: benefit,
+          targetCustomer,
+          location,
+          moreAboutProduct,
+          currentInstructions: customerInstructions,
+          trainingAssets: {
+            companyInfo: uploadedFiles['Company Info'] || null,
+            knowledgeBase: uploadedFiles['Knowledge Base'] || null,
+            salesPlaybook: uploadedFiles['Sales Playbook'] || null,
+          },
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to refine instructions');
+      }
+
+      const result = await response.json();
+      const refinedInstructions = String(result?.data?.instructions || '').trim();
+      if (!refinedInstructions) {
+        throw new Error('AI returned empty instructions');
+      }
+
+      setCustomerInstructions(refinedInstructions);
+      setStyleAndTone('Aggressive');
+      setCharacteristics('Confident, charismatic, persuasive, direct, revenue-focused, ethical closer');
+      setStatusMessage('Customer instructions refined with AI.');
+      setRefineState('idle');
+    } catch (error) {
+      console.error(error);
+      setRefineState('error');
+      setStatusMessage('Could not refine customer instructions with AI.');
+    }
+  };
 
   const triggerUpload = (label: string) => {
     setUploadingAsset(label);
@@ -545,7 +594,19 @@ function TrainingPageInner() {
               <div className="flex flex-col gap-5">
                 <FormInput label="Characteristics" value={characteristics} onChange={setCharacteristics} placeholder="e.g. Professional, witty, detail-oriented" />
                 <div className="space-y-1.5 flex flex-col items-start">
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Customer Instructions</label>
+                  <div className="flex w-full items-center justify-between gap-2">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Customer Instructions</label>
+                    <button
+                      type="button"
+                      onClick={handleRefineCustomerInstructions}
+                      disabled={refineState === 'loading'}
+                      title="Refine from Product & Services"
+                      aria-label="Refine customer instructions from Product & Services"
+                      className="flex h-8 w-8 items-center justify-center bg-white border border-gray-100 rounded-xl text-blue-600 shadow-sm hover:bg-gray-50 hover:border-blue-200 transition-all disabled:opacity-60"
+                    >
+                      <Sparkles size={14} className={refineState === 'loading' ? 'animate-pulse' : ''} />
+                    </button>
+                  </div>
                   <textarea 
                     value={customerInstructions}
                     onChange={(e) => setCustomerInstructions(e.target.value)}

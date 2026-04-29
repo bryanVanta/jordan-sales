@@ -8,6 +8,7 @@ const emailService = require('./emailService');
 const whatsappService = require('./whatsappService');
 const { generateMessageWithOpenClaw } = require('./openClawService');
 const { generateSystemPrompt, callLLM } = require('./llmService');
+const { getProductInfo } = require('./productInfoService');
 
 /**
  * Select the best communication channel based on available contact info
@@ -163,6 +164,7 @@ async function saveOutreachRecord(lead, channel, messageContent, result) {
 
     const record = {
       leadId: lead.id,
+      productInfoId: lead.productInfoId || null,
       company: lead.company || 'Unknown Company',
       contactPerson: lead.person || null,
       contactEmail: lead.email || null,
@@ -215,9 +217,8 @@ async function executeBulkOutreach(leadIds, productInfoId = 'current', options =
       details: [],
     };
 
-    // Get product info for context
-    const productDoc = await db.collection('products').doc(productInfoId).get();
-    const productInfo = productDoc.exists ? productDoc.data() : {};
+    // Get default product info for context. Individual leads can override with lead.productInfoId.
+    const defaultProductInfo = (await getProductInfo(productInfoId)) || {};
 
     // Process each lead
     for (const leadId of leadIds) {
@@ -236,6 +237,10 @@ async function executeBulkOutreach(leadIds, productInfoId = 'current', options =
         }
 
         const lead = { id: leadDoc.id, ...leadDoc.data() };
+        const leadProductInfoId = String(lead.productInfoId || productInfoId || 'current').trim();
+        const productInfo = leadProductInfoId === productInfoId
+          ? defaultProductInfo
+          : ((await getProductInfo(leadProductInfoId)) || defaultProductInfo);
 
         // Select channel (allow explicit override from API)
         let channelInfo = null;
@@ -271,7 +276,7 @@ async function executeBulkOutreach(leadIds, productInfoId = 'current', options =
         }
 
         // Generate personalized message
-        const messageContent = await generateOutreachMessage(lead, productInfo, channelInfo.channel, productInfoId);
+        const messageContent = await generateOutreachMessage(lead, productInfo, channelInfo.channel, leadProductInfoId);
         if (!messageContent) {
           results.failed++;
           results.details.push({

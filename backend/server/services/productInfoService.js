@@ -32,6 +32,7 @@ const normalizeAsset = (asset) => {
       mimeType: '',
       extractedText: '',
       uploadedAt: null,
+      files: [],
     };
   }
 
@@ -41,14 +42,33 @@ const normalizeAsset = (asset) => {
       mimeType: '',
       extractedText: '',
       uploadedAt: null,
+      files: asset ? [{ fileName: asset, mimeType: '', extractedText: '', uploadedAt: null }] : [],
     };
   }
 
+  const files = Array.isArray(asset.files)
+    ? asset.files
+        .filter(Boolean)
+        .map((file) => ({
+          id: file.id || null,
+          fileName: file.fileName || '',
+          mimeType: file.mimeType || '',
+          fileSizeBytes: Number(file.fileSizeBytes || 0),
+          extractedChars: Number(file.extractedChars || (file.extractedText ? String(file.extractedText).length : 0)),
+          uploadedAt: file.uploadedAt || null,
+          extractionStatus: file.extractionStatus || 'completed',
+        }))
+    : [];
+
+  const latest = files[files.length - 1] || null;
+
   return {
-    fileName: asset.fileName || '',
-    mimeType: asset.mimeType || '',
+    fileName: latest?.fileName || asset.fileName || '',
+    mimeType: latest?.mimeType || asset.mimeType || '',
+    // Keep legacy field readable, but new PostgreSQL-backed uploads should only store text in Postgres.
     extractedText: asset.extractedText || '',
-    uploadedAt: asset.uploadedAt || null,
+    uploadedAt: latest?.uploadedAt || asset.uploadedAt || null,
+    files,
   };
 };
 
@@ -334,15 +354,17 @@ async function saveProductInfo(productInfoId, data) {
   const mergedTrainingAssets = {};
   for (const key of TRAINING_ASSET_KEYS) {
     const incoming = data.trainingAssets?.[key] || {};
-    const existing = existingData.trainingAssets?.[key] || {};
-    // Only update if incoming has extractedText or fileName
-    if (incoming.extractedText || incoming.fileName) {
-      mergedTrainingAssets[key] = {
+    const existing = normalizeAsset(existingData.trainingAssets?.[key] || {});
+    // `files` is authoritative when present, including empty arrays after document removal.
+    if (Array.isArray(incoming.files)) {
+      mergedTrainingAssets[key] = normalizeAsset(incoming);
+    } else if (incoming.extractedText || incoming.fileName) {
+      mergedTrainingAssets[key] = normalizeAsset({
         fileName: incoming.fileName || existing.fileName || '',
         mimeType: incoming.mimeType || existing.mimeType || '',
         extractedText: incoming.extractedText || existing.extractedText || '',
         uploadedAt: incoming.uploadedAt || existing.uploadedAt || null,
-      };
+      });
     } else {
       // Preserve existing if nothing new provided
       mergedTrainingAssets[key] = existing;

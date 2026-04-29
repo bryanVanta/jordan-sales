@@ -40,6 +40,24 @@ Default behavior:
 - Avoid overly comprehensive generic material. Prioritize what a rep can actually say, send, or do next.
 - Use clear claims, concise proof points, and language sales teams would naturally use with buyers.`;
 
+type TrainingAssetFile = {
+  id?: string | null;
+  fileName: string;
+  mimeType?: string;
+  fileSizeBytes?: number;
+  extractedChars?: number;
+  uploadedAt?: string | null;
+  extractionStatus?: string;
+};
+
+type TrainingAsset = {
+  fileName?: string;
+  mimeType?: string;
+  extractedText?: string;
+  uploadedAt?: string | null;
+  files?: TrainingAssetFile[];
+};
+
 function TrainingFooterPortal({ handleSaveChanges, handleFindLeads, saveState, findLeadsState, findLeadsProgress }: any) {
   const [isMounted, setIsMounted] = useState(false);
 
@@ -213,7 +231,7 @@ function TrainingPageInner() {
   // Upload Logic states
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploadingAsset, setUploadingAsset] = useState<string | null>(null);
-  const [uploadedFiles, setUploadedFiles] = useState<Record<string, { fileName: string; mimeType?: string; extractedText?: string; uploadedAt?: string | null }>>({});
+  const [uploadedFiles, setUploadedFiles] = useState<Record<string, TrainingAsset>>({});
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [findLeadsState, setFindLeadsState] = useState<'idle' | 'loading' | 'error'>('idle');
   const [refineState, setRefineState] = useState<'idle' | 'loading' | 'error'>('idle');
@@ -222,6 +240,31 @@ function TrainingPageInner() {
 
   const toneOptions = ['Default', 'Professional', 'Casual', 'Enthusiastic', 'Precise', 'Witty', 'Aggressive'];
   const productTypeOptions = ['Service', 'Product', 'Software', 'Consulting', 'Agency', 'Other'];
+
+  const normalizeTrainingAsset = (asset: any): TrainingAsset => {
+    if (!asset) return { files: [] };
+    const files = Array.isArray(asset.files)
+      ? asset.files.filter(Boolean)
+      : asset.fileName
+        ? [{
+            fileName: asset.fileName,
+            mimeType: asset.mimeType || '',
+            extractedChars: asset.extractedText ? String(asset.extractedText).length : 0,
+            uploadedAt: asset.uploadedAt || null,
+          }]
+        : [];
+
+    const latest = files[files.length - 1];
+    return {
+      ...asset,
+      fileName: latest?.fileName || asset.fileName || '',
+      mimeType: latest?.mimeType || asset.mimeType || '',
+      uploadedAt: latest?.uploadedAt || asset.uploadedAt || null,
+      files,
+    };
+  };
+
+  const getAssetFiles = (label: string) => normalizeTrainingAsset(uploadedFiles[label]).files || [];
 
   const handleRefineCustomerInstructions = async () => {
     setRefineState('loading');
@@ -239,6 +282,7 @@ function TrainingPageInner() {
           targetCustomer,
           location,
           moreAboutProduct,
+          productInfoId: effectiveProductInfoId,
           currentInstructions: customerInstructions,
           trainingAssets: {
             companyInfo: uploadedFiles['Company Info'] || null,
@@ -275,28 +319,36 @@ function TrainingPageInner() {
     fileInputRef.current?.click();
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !uploadingAsset) return;
+  const readFileBase64 = (file: File) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = typeof reader.result === 'string' ? reader.result : '';
+        const base64 = result.includes(',') ? result.split(',')[1] : result;
+        resolve(base64);
+      };
+      reader.onerror = () => reject(new Error('Failed to read file'));
+      reader.readAsDataURL(file);
+    });
 
-    const uploadSelectedFile = async () => {
-      setStatusMessage(`Uploading ${file.name}...`);
+  const uploadOneTrainingFile = async (file: File, assetLabel: string, effectiveId: string) => {
+    const contentBase64 = await readFileBase64(file);
+    const assetKey = trainingAssetKeyMap[assetLabel];
 
-      const contentBase64 = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-          const result = typeof reader.result === 'string' ? reader.result : '';
-          const base64 = result.includes(',') ? result.split(',')[1] : result;
-          resolve(base64);
-        };
-        reader.onerror = () => reject(new Error('Failed to read file'));
-        reader.readAsDataURL(file);
-      });
+    let response = await fetch(`${API_BASE_URL}/product-info/${encodeURIComponent(effectiveId)}/upload-asset`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        assetKey,
+        fileName: file.name,
+        mimeType: file.type,
+        contentBase64,
+      }),
+    });
 
-      const assetKey = trainingAssetKeyMap[uploadingAsset];
-      const effectiveId = await ensureProjectId();
-
-      let response = await fetch(`${API_BASE_URL}/product-info/${encodeURIComponent(effectiveId)}/upload-asset`, {
+    // Backwards-compatible fallback if backend hasn't been restarted yet (only safe for `current`)
+    if (response.status === 404 && effectiveId === 'current') {
+      response = await fetch(`${API_BASE_URL}/product-info/upload-asset`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -306,52 +358,52 @@ function TrainingPageInner() {
           contentBase64,
         }),
       });
+    }
 
-      // Backwards-compatible fallback if backend hasn't been restarted yet (only safe for `current`)
-      if (response.status === 404 && effectiveId === 'current') {
-        response = await fetch(`${API_BASE_URL}/product-info/upload-asset`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            assetKey,
-            fileName: file.name,
-            mimeType: file.type,
-            contentBase64,
-          }),
-        });
+    if (response.status === 404 && effectiveId !== 'current') {
+      throw new Error('Backend restart required to upload assets for new projects.');
+    }
+
+    if (!response.ok) {
+      let message = `Failed to upload ${file.name}`;
+      try {
+        const errorResult = await response.json();
+        if (errorResult?.error) message = errorResult.error;
+      } catch {}
+      throw new Error(message);
+    }
+
+    return response.json();
+  };
+
+  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length || !uploadingAsset) return;
+
+    const uploadSelectedFile = async () => {
+      setStatusMessage(`Uploading ${files.length} file${files.length === 1 ? '' : 's'}...`);
+      const effectiveId = await ensureProjectId();
+      let latestAsset: TrainingAsset | null = null;
+
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        setStatusMessage(`Uploading ${index + 1}/${files.length}: ${file.name}...`);
+        const result = await uploadOneTrainingFile(file, uploadingAsset, effectiveId);
+        latestAsset = normalizeTrainingAsset(result.data);
       }
 
-      if (response.status === 404 && effectiveId !== 'current') {
-        throw new Error('Backend restart required to upload assets for new projects.');
+      if (latestAsset) {
+        setUploadedFiles((prev) => ({
+          ...prev,
+          [uploadingAsset]: latestAsset,
+        }));
       }
-
-      if (!response.ok) {
-        let message = `Failed to upload ${file.name}`;
-        try {
-          const errorResult = await response.json();
-          if (errorResult?.error) {
-            message = errorResult.error;
-          }
-        } catch {}
-        throw new Error(message);
-      }
-
-      const result = await response.json();
-      setUploadedFiles((prev) => ({
-        ...prev,
-        [uploadingAsset]: {
-          fileName: result.data.fileName || file.name,
-          mimeType: result.data.mimeType || file.type,
-          extractedText: result.data.extractedText || '',
-          uploadedAt: result.data.uploadedAt || null,
-        },
-      }));
-      setStatusMessage(`${file.name} uploaded and extracted.`);
+      setStatusMessage(`${files.length} file${files.length === 1 ? '' : 's'} uploaded and indexed.`);
     };
 
     uploadSelectedFile().catch((error) => {
       console.error(error);
-      setStatusMessage(`Could not upload ${file.name}.`);
+      setStatusMessage(`Could not upload selected file${files.length === 1 ? '' : 's'}.`);
     }).finally(() => {
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
@@ -377,11 +429,41 @@ function TrainingPageInner() {
       referenceChatHistory,
     },
     trainingAssets: {
-      companyInfo: uploadedFiles['Company Info'] || { fileName: '', mimeType: '', extractedText: '' },
-      knowledgeBase: uploadedFiles['Knowledge Base'] || { fileName: '', mimeType: '', extractedText: '' },
-      salesPlaybook: uploadedFiles['Sales Playbook'] || { fileName: '', mimeType: '', extractedText: '' },
+      companyInfo: normalizeTrainingAsset(uploadedFiles['Company Info']),
+      knowledgeBase: normalizeTrainingAsset(uploadedFiles['Knowledge Base']),
+      salesPlaybook: normalizeTrainingAsset(uploadedFiles['Sales Playbook']),
     },
   });
+
+  const handleRemoveTrainingFile = async (assetLabel: string, documentId?: string | null) => {
+    const assetKey = trainingAssetKeyMap[assetLabel];
+    if (!documentId || !assetKey) {
+      setUploadedFiles(prev => {
+        const current = normalizeTrainingAsset(prev[assetLabel]);
+        const remaining = (current.files || []).filter((file) => file.id !== documentId);
+        return { ...prev, [assetLabel]: normalizeTrainingAsset({ files: remaining }) };
+      });
+      return;
+    }
+
+    try {
+      const effectiveId = await ensureProjectId();
+      const response = await fetch(
+        `${API_BASE_URL}/product-info/${encodeURIComponent(effectiveId)}/upload-asset/${encodeURIComponent(documentId)}?assetKey=${encodeURIComponent(assetKey)}`,
+        { method: 'DELETE' }
+      );
+      if (!response.ok) throw new Error('Failed to remove training file');
+      const result = await response.json();
+      setUploadedFiles((prev) => ({
+        ...prev,
+        [assetLabel]: normalizeTrainingAsset(result.data),
+      }));
+      setStatusMessage('Training file removed.');
+    } catch (error) {
+      console.error(error);
+      setStatusMessage('Could not remove training file.');
+    }
+  };
 
   useEffect(() => {
     if (justCreatedProjectIdRef.current && justCreatedProjectIdRef.current === effectiveProductInfoId) {
@@ -431,9 +513,9 @@ function TrainingPageInner() {
         setReferenceMemories(data.personalization?.referenceMemories !== false);
         setReferenceChatHistory(data.personalization?.referenceChatHistory !== false);
         setUploadedFiles({
-          'Company Info': data.trainingAssets?.companyInfo || { fileName: '', mimeType: '', extractedText: '' },
-          'Knowledge Base': data.trainingAssets?.knowledgeBase || { fileName: '', mimeType: '', extractedText: '' },
-          'Sales Playbook': data.trainingAssets?.salesPlaybook || { fileName: '', mimeType: '', extractedText: '' },
+          'Company Info': normalizeTrainingAsset(data.trainingAssets?.companyInfo),
+          'Knowledge Base': normalizeTrainingAsset(data.trainingAssets?.knowledgeBase),
+          'Sales Playbook': normalizeTrainingAsset(data.trainingAssets?.salesPlaybook),
         });
       } catch (error) {
         console.error('Failed to load product info:', error);
@@ -546,6 +628,7 @@ function TrainingPageInner() {
         ref={fileInputRef}
         className="hidden"
         accept=".pdf,.doc,.docx,.txt,.rtf,.odt"
+        multiple
         onChange={handleFileUpload}
       />
       
@@ -674,39 +757,49 @@ function TrainingPageInner() {
                   { label: 'Company Info', hint: 'Upload company profile, positioning, proof points, case studies', icon: <Briefcase size={16} /> },
                   { label: 'Knowledge Base', hint: 'Upload product brochure, product docs, feature sheets, FAQs', icon: <Database size={16} /> },
                   { label: 'Sales Playbook', hint: 'Upload pitch framework, ICP, objections, talk tracks', icon: <Terminal size={16} /> }
-                ].map((item) => (
-                  <div key={item.label} className="flex flex-col bg-gray-50/50 p-1 rounded-2xl border border-gray-100 group hover:border-blue-200 hover:bg-white transition-all overflow-hidden">
-                    <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between px-4 sm:px-5 py-3.5 gap-3">
-                      <div className="flex items-center gap-3">
-                        <div className="text-gray-400 group-hover:text-blue-600 transition-colors">{item.icon}</div>
-                        <div>
-                          <span className="text-[13px] font-bold text-gray-700">{item.label}</span>
-                          <p className="text-[10px] font-bold text-gray-400 mt-0.5">{item.hint}</p>
-                        </div>
-                      </div>
-                      <button 
-                        onClick={() => triggerUpload(item.label)}
-                        className="flex items-center justify-center gap-2 bg-white border border-gray-100 px-4 py-2 rounded-xl text-[11px] font-black text-gray-800 shadow-sm hover:bg-gray-50 uppercase tracking-tight"
-                      >
-                        <Upload size={14} className="text-blue-600" /> {uploadedFiles[item.label]?.fileName ? 'Replace' : 'Upload'}
-                      </button>
-                    </div>
-                    {uploadedFiles[item.label]?.fileName && (
-                       <div className="bg-emerald-50 px-5 py-2.5 flex items-center justify-between border-t border-emerald-100/50">
-                          <div className="flex items-center gap-2 truncate">
-                             <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                             <span className="text-[10px] font-black text-emerald-700 truncate">
-                               {uploadedFiles[item.label]?.fileName}
-                               {uploadedFiles[item.label]?.extractedText
-                                 ? ` · ${uploadedFiles[item.label]?.extractedText?.length || 0} chars extracted`
-                                 : ' · uploaded, no text extracted'}
-                             </span>
+                ].map((item) => {
+                  const files = getAssetFiles(item.label);
+                  return (
+                    <div key={item.label} className="flex flex-col bg-gray-50/50 rounded-2xl border border-gray-100 group hover:border-blue-200 hover:bg-white transition-all overflow-hidden">
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between px-4 sm:px-5 py-3.5 gap-3">
+                        <div className="flex items-center gap-3">
+                          <div className="text-gray-400 group-hover:text-blue-600 transition-colors">{item.icon}</div>
+                          <div>
+                            <span className="text-[13px] font-bold text-gray-700">{item.label}</span>
+                            <p className="text-[10px] font-bold text-gray-400 mt-0.5">{item.hint}</p>
+                            {files.length ? (
+                              <p className="text-[9px] font-black text-emerald-600 mt-1">{files.length} file{files.length === 1 ? '' : 's'} indexed</p>
+                            ) : null}
                           </div>
-                          <button onClick={() => setUploadedFiles(prev => { const n = {...prev}; delete n[item.label]; return n; })} className="text-emerald-500 hover:text-emerald-700"><X size={12} /></button>
-                       </div>
-                    )}
-                  </div>
-                ))}
+                        </div>
+                        <button 
+                          onClick={() => triggerUpload(item.label)}
+                          className="flex items-center justify-center gap-2 bg-white border border-gray-100 px-4 py-2 rounded-xl text-[11px] font-black text-gray-800 shadow-sm hover:bg-gray-50 uppercase tracking-tight"
+                        >
+                          <Upload size={14} className="text-blue-600" /> Add Files
+                        </button>
+                      </div>
+                      {files.length > 0 && (
+                         <div className="bg-emerald-50 border-t border-emerald-100/50 divide-y divide-emerald-100/60">
+                            {files.map((file, index) => (
+                              <div key={file.id || `${file.fileName}-${index}`} className="px-5 py-2.5 flex items-center justify-between gap-3">
+                                <div className="flex items-center gap-2 min-w-0">
+                                   <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 flex-shrink-0" />
+                                   <span className="text-[10px] font-black text-emerald-700 truncate">
+                                     {file.fileName}
+                                     {file.extractedChars
+                                       ? ` · ${file.extractedChars} chars indexed`
+                                       : ' · stored'}
+                                   </span>
+                                </div>
+                                <button onClick={() => handleRemoveTrainingFile(item.label, file.id)} className="text-emerald-500 hover:text-emerald-700 flex-shrink-0"><X size={12} /></button>
+                              </div>
+                            ))}
+                         </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
 
               <div className="space-y-1.5 flex flex-col items-start pt-2 pb-4">

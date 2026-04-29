@@ -23,6 +23,7 @@ const webhooksRouter = require('./routes/webhooks');
 const sentimentRouter = require('./routes/sentiment');
 const testRouter = require('./routes/test');
 const whatsappRouter = require('./routes/whatsapp');
+const postgresRouter = require('./routes/postgres');
 const { initializeSystem } = require('./services/initializationService');
 const { getProgress, requestTerminate } = require('./services/progressService');
 const { initializeScheduledJobs } = require('./services/schedulerService');
@@ -68,6 +69,7 @@ app.use('/api/whatsapp', whatsappRouter);
 app.use('/api/webhooks', webhooksRouter);
 app.use('/api/sentiment', sentimentRouter);
 app.use('/api/test', testRouter);
+app.use('/api/postgres', postgresRouter);
 
 // API status endpoint
 app.get('/api/status', (req, res) => {

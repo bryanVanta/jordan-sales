@@ -6,6 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const { generateSystemPrompt, generateLLMPrompt, sendMessage, callOpenRouter, callLLM, analyzeCustomerStatus } = require('../services/llmService');
+const { getTrainingAssetText } = require('../services/trainingDocumentStore');
 
 // Get system prompt (for debugging/testing)
 router.get('/system-prompt', async (req, res) => {
@@ -63,16 +64,26 @@ router.post('/refine-instructions', async (req, res) => {
       targetCustomer,
       location,
       moreAboutProduct,
+      productInfoId,
       currentInstructions,
       trainingAssets,
     } = req.body || {};
 
-    const assetSummary = Object.entries(trainingAssets || {})
-      .filter(([, asset]) => asset?.fileName || asset?.extractedText)
-      .map(([key, asset]) => {
-        const text = String(asset?.extractedText || '').trim();
-        return `${key}: ${asset?.fileName || 'uploaded asset'}${text ? `\n${text.slice(0, 1500)}` : ''}`;
-      })
+    const assetSummaryParts = await Promise.all(
+      Object.entries(trainingAssets || {})
+        .filter(([, asset]) => asset?.fileName || asset?.extractedText || (Array.isArray(asset?.files) && asset.files.length))
+        .map(async ([key, asset]) => {
+          const postgresText = productInfoId ? await getTrainingAssetText(productInfoId, key).catch(() => '') : '';
+          const text = String(postgresText || asset?.extractedText || '').trim();
+          const fileNames = Array.isArray(asset?.files) && asset.files.length
+            ? asset.files.map((file) => file?.fileName).filter(Boolean).join(', ')
+            : asset?.fileName || 'uploaded asset';
+          return `${key}: ${fileNames}${text ? `\n${text.slice(0, 1500)}` : ''}`;
+        })
+    );
+
+    const assetSummary = assetSummaryParts
+      .filter(Boolean)
       .join('\n\n');
 
     const prompt = `Create customer instructions for Jordan, a B2B sales assistant.

@@ -7,6 +7,7 @@
 const axios = require('axios');
 const { getProduct, getAllProducts } = require('./productService');
 const { getProductInfo, CURRENT_DOC_ID, DEFAULT_CUSTOMER_INSTRUCTIONS } = require('./productInfoService');
+const { getTrainingAssetText } = require('./trainingDocumentStore');
 const { callAgentWithOpenClawCliViaSsh } = require('./openClawService');
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY;
@@ -20,6 +21,11 @@ const trimPromptSection = (value = '', max = 6000) => {
   const text = String(value || '').trim();
   if (!text || text.length <= max) return text;
   return `${text.slice(0, max).trim()}\n[truncated]`;
+};
+
+const getAssetText = async (productId, assetKey, legacyAsset = {}) => {
+  const postgresText = await getTrainingAssetText(productId || CURRENT_DOC_ID, assetKey).catch(() => '');
+  return postgresText || legacyAsset?.extractedText || '';
 };
 
 /**
@@ -48,10 +54,14 @@ async function generateSystemPrompt(productId = null) {
 
     const personalization = product.personalization || {};
     const trainingAssets = product.trainingAssets || {};
+    const activeProductId = product.id || productId || CURRENT_DOC_ID;
+    const companyInfoText = await getAssetText(activeProductId, 'companyInfo', trainingAssets.companyInfo);
+    const knowledgeBaseText = await getAssetText(activeProductId, 'knowledgeBase', trainingAssets.knowledgeBase);
+    const salesPlaybookText = await getAssetText(activeProductId, 'salesPlaybook', trainingAssets.salesPlaybook);
     const assetKnowledge = [
-      trainingAssets.companyInfo?.extractedText ? `Company Info:\n${trimPromptSection(trainingAssets.companyInfo.extractedText)}` : '',
-      trainingAssets.knowledgeBase?.extractedText ? `Knowledge Base / Product Docs:\n${trimPromptSection(trainingAssets.knowledgeBase.extractedText)}` : '',
-      trainingAssets.salesPlaybook?.extractedText ? `Sales Playbook:\n${trimPromptSection(trainingAssets.salesPlaybook.extractedText)}` : '',
+      companyInfoText ? `Company Info:\n${trimPromptSection(companyInfoText)}` : '',
+      knowledgeBaseText ? `Knowledge Base / Product Docs:\n${trimPromptSection(knowledgeBaseText)}` : '',
+      salesPlaybookText ? `Sales Playbook:\n${trimPromptSection(salesPlaybookText)}` : '',
     ].filter(Boolean).join('\n\n');
     const customerInstructions = String(
       personalization.customerInstructions || product.instructions || DEFAULT_CUSTOMER_INSTRUCTIONS

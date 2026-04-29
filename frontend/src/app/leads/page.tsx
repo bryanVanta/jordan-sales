@@ -396,6 +396,7 @@ function LeadsPageInner() {
         temp: formData.temp,
         leadTemperature: formData.temp,
         status: 'new',
+        productInfoId: selectedProjectId,
         intent: formData.intent,
         next: formData.next,
         nextAction: formData.next,
@@ -440,7 +441,7 @@ function LeadsPageInner() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           leadIds: selectedProjects,
-          productInfoId: 'current',
+          productInfoId: selectedProjectId || 'current',
         }),
       });
 

@@ -82,6 +82,15 @@ const normalizeE164 = (input = '') => {
   const digits = withoutPrefix.replace(/[^\d]/g, '');
   if (!digits) return '';
 
+  // Malaysia local mobile/landline format: 0142319219 -> +60142319219.
+  if (digits.startsWith('0') && digits.length >= 9 && digits.length <= 11) {
+    return `+60${digits.slice(1)}`;
+  }
+
+  if (digits.startsWith('60')) {
+    return `+${digits}`;
+  }
+
   return `+${digits}`;
 };
 

@@ -10,6 +10,8 @@ node_modules
 dist
 out
 build
+uploads/
+backend/uploads/
 *.pem
 .DS_Store
 .idea

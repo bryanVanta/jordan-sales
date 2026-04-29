@@ -11,6 +11,8 @@ const { processInboundAutoReply } = require('../services/autoReplyService');
 const { maybeStoreInboundMedia } = require('../services/mediaStorageService');
 const { transcribeAudioUrl } = require('../services/elevenLabsSttService');
 
+const WHATSAPP_DUPLICATE_BODY_WINDOW_MS = 2 * 60 * 1000;
+
 /**
  * POST /api/webhooks/inbound-email
  * Webhook endpoint to receive inbound emails from Resend
@@ -272,6 +274,25 @@ router.post('/inbound-whatsapp', async (req, res) => {
       return [];
     };
 
+    const normalizeDuplicateText = (value) => String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+    const findRecentInboundDuplicate = async () => {
+      const recentSnapshot = await inboundRef.orderBy('createdAt', 'desc').limit(75).get();
+      const incomingBody = normalizeDuplicateText(resolvedBody);
+      if (!incomingBody) return null;
+
+      return (
+        recentSnapshot.docs.find((doc) => {
+          const data = doc.data();
+          if (String(data.contactWhatsApp || '') !== String(from)) return false;
+          const existingBody = normalizeDuplicateText(data.content);
+          const createdAt = data.createdAt?.toDate?.();
+          const ageMs = createdAt instanceof Date ? Math.abs(Date.now() - createdAt.getTime()) : Number.POSITIVE_INFINITY;
+          return existingBody === incomingBody && ageMs <= WHATSAPP_DUPLICATE_BODY_WINDOW_MS;
+        }) || null
+      );
+    };
+
     const shouldBackfillDuplicate = (existingData, incomingMediaValue, incomingTranscriptValue, incomingBodyText) => {
       const existingMedia = existingData?.media || null;
       const incomingMedia = incomingMediaValue || null;
@@ -380,6 +401,8 @@ router.post('/inbound-whatsapp', async (req, res) => {
         .then((result) => {
           if (result?.skipped) {
             console.log(`[Webhook] WhatsApp auto-reply skipped for lead ${leadId}: ${result.reason}`);
+          } else if (result?.sendResult && result.sendResult.success === false) {
+            console.warn(`[Webhook] WhatsApp auto-reply failed for lead ${leadId}: ${result.sendResult.error || 'send failed'}`);
           } else {
             console.log(`[Webhook] WhatsApp auto-reply sent for lead ${leadId}`);
           }
@@ -399,18 +422,7 @@ router.post('/inbound-whatsapp', async (req, res) => {
 
         // Some gateways generate different IDs across lifecycle events; apply recent-body dedupe too.
         // IMPORTANT: Avoid composite-index requirements by querying recent docs by time only and filtering in-memory.
-        const recentSnapshot = await inboundRef.orderBy('createdAt', 'desc').limit(50).get();
-        const incomingBody = String(resolvedBody).trim();
-        const duplicateRecent = recentSnapshot.docs.find((doc) => {
-          const data = doc.data();
-          if (String(data.contactWhatsApp || '') !== String(from)) return false;
-          const existingBody = String(data.content || '').trim();
-          const createdAt = data.createdAt?.toDate?.();
-          const ageMs = createdAt instanceof Date ? Math.abs(Date.now() - createdAt.getTime()) : Number.POSITIVE_INFINITY;
-          // Only treat as duplicate when it's truly a gateway retry; keep the window tight so users
-          // can legitimately send the same text twice without it being dropped.
-          return existingBody === incomingBody && ageMs <= 10 * 1000;
-        });
+        const duplicateRecent = await findRecentInboundDuplicate();
 
         if (duplicateRecent) {
           console.log(`[Webhook] Duplicate inbound WhatsApp ignored via recent match: ${duplicateRecent.id}`);
@@ -420,17 +432,7 @@ router.post('/inbound-whatsapp', async (req, res) => {
         }
       } else {
         // IMPORTANT: Avoid composite-index requirements by querying recent docs by time only and filtering in-memory.
-        const recentSnapshot = await inboundRef.orderBy('createdAt', 'desc').limit(50).get();
-
-        const incomingBody = String(resolvedBody).trim();
-        const duplicateRecent = recentSnapshot.docs.find((doc) => {
-          const data = doc.data();
-          if (String(data.contactWhatsApp || '') !== String(from)) return false;
-          const existingBody = String(data.content || '').trim();
-          const createdAt = data.createdAt?.toDate?.();
-          const ageMs = createdAt instanceof Date ? Math.abs(Date.now() - createdAt.getTime()) : Number.POSITIVE_INFINITY;
-          return existingBody === incomingBody && ageMs <= 10 * 1000;
-        });
+        const duplicateRecent = await findRecentInboundDuplicate();
 
         if (duplicateRecent) {
           console.log(`[Webhook] Duplicate inbound WhatsApp ignored via recent match: ${duplicateRecent.id}`);
@@ -619,6 +621,8 @@ router.post('/inbound-whatsapp', async (req, res) => {
               .then((result) => {
                 if (result?.skipped) {
                   console.log(`[Webhook] WhatsApp auto-reply skipped for lead ${leadId}: ${result.reason}`);
+                } else if (result?.sendResult && result.sendResult.success === false) {
+                  console.warn(`[Webhook] WhatsApp auto-reply failed for lead ${leadId}: ${result.sendResult.error || 'send failed'}`);
                 } else {
                   console.log(`[Webhook] WhatsApp auto-reply sent for lead ${leadId}`);
                 }
@@ -648,6 +652,8 @@ router.post('/inbound-whatsapp', async (req, res) => {
           .then((result) => {
             if (result?.skipped) {
               console.log(`[Webhook] WhatsApp auto-reply skipped for lead ${leadId}: ${result.reason}`);
+            } else if (result?.sendResult && result.sendResult.success === false) {
+              console.warn(`[Webhook] WhatsApp auto-reply failed for lead ${leadId}: ${result.sendResult.error || 'send failed'}`);
             } else {
               console.log(`[Webhook] WhatsApp auto-reply sent for lead ${leadId}`);
             }

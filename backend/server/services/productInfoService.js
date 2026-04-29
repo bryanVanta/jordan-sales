@@ -9,11 +9,21 @@ const os = require('os');
 const path = require('path');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
+const { PDFParse } = require('pdf-parse');
 
 const COLLECTION_NAME = 'Product-Info';
 const CURRENT_DOC_ID = 'current';
 const TRAINING_ASSET_KEYS = ['companyInfo', 'knowledgeBase', 'salesPlaybook'];
 const execFileAsync = promisify(execFile);
+const DEFAULT_CUSTOMER_INSTRUCTIONS = `Jordan helps B2B sales teams create functional sales collateral that helps reps close deals, not generic documents that sit unused.
+
+Default behavior:
+- Act like a practical sales-enablement partner for revenue teams, sales leaders, and enablement professionals.
+- Create situation-specific collateral: pitch decks, one-pagers, objection handling, demo scripts, playbooks, follow-up messages, and talk tracks.
+- Keep outputs scannable, rep-friendly, and easy to use in live selling conversations.
+- Connect every product capability to a buyer outcome, business impact, or deal-stage use case.
+- Avoid overly comprehensive generic material. Prioritize what a rep can actually say, send, or do next.
+- Use clear claims, concise proof points, and language sales teams would naturally use with buyers.`;
 
 const normalizeAsset = (asset) => {
   if (!asset) {
@@ -22,6 +32,7 @@ const normalizeAsset = (asset) => {
       mimeType: '',
       extractedText: '',
       uploadedAt: null,
+      files: [],
     };
   }
 
@@ -31,14 +42,33 @@ const normalizeAsset = (asset) => {
       mimeType: '',
       extractedText: '',
       uploadedAt: null,
+      files: asset ? [{ fileName: asset, mimeType: '', extractedText: '', uploadedAt: null }] : [],
     };
   }
 
+  const files = Array.isArray(asset.files)
+    ? asset.files
+        .filter(Boolean)
+        .map((file) => ({
+          id: file.id || null,
+          fileName: file.fileName || '',
+          mimeType: file.mimeType || '',
+          fileSizeBytes: Number(file.fileSizeBytes || 0),
+          extractedChars: Number(file.extractedChars || (file.extractedText ? String(file.extractedText).length : 0)),
+          uploadedAt: file.uploadedAt || null,
+          extractionStatus: file.extractionStatus || 'completed',
+        }))
+    : [];
+
+  const latest = files[files.length - 1] || null;
+
   return {
-    fileName: asset.fileName || '',
-    mimeType: asset.mimeType || '',
+    fileName: latest?.fileName || asset.fileName || '',
+    mimeType: latest?.mimeType || asset.mimeType || '',
+    // Keep legacy field readable, but new PostgreSQL-backed uploads should only store text in Postgres.
     extractedText: asset.extractedText || '',
-    uploadedAt: asset.uploadedAt || null,
+    uploadedAt: latest?.uploadedAt || asset.uploadedAt || null,
+    files,
   };
 };
 
@@ -50,6 +80,14 @@ const normalizePayload = (data = {}) => ({
   targetCustomer: data.targetCustomer || '',
   location: data.location || '',
   moreAboutProduct: data.moreAboutProduct || '',
+  personalization: {
+    styleAndTone: data.personalization?.styleAndTone || 'Default',
+    characteristics: data.personalization?.characteristics || '',
+    customerInstructions: data.personalization?.customerInstructions || DEFAULT_CUSTOMER_INSTRUCTIONS,
+    autoSales: Boolean(data.personalization?.autoSales),
+    referenceMemories: data.personalization?.referenceMemories !== false,
+    referenceChatHistory: data.personalization?.referenceChatHistory !== false,
+  },
   trainingAssets: {
     companyInfo: normalizeAsset(data.trainingAssets?.companyInfo),
     knowledgeBase: normalizeAsset(data.trainingAssets?.knowledgeBase),
@@ -91,6 +129,67 @@ const extractViaStrings = async (tempPath) => {
     .trim();
 };
 
+const extractViaPdfParse = async (buffer) => {
+  const parser = new PDFParse({ data: buffer });
+  try {
+    const parsed = await parser.getText();
+    return normalizeExtractedText(parsed?.text || '');
+  } finally {
+    await parser.destroy().catch(() => {});
+  }
+};
+
+const normalizeExtractedText = (text = '') =>
+  String(text || '')
+    .replace(/\r/g, '\n')
+    .replace(/[ \t]+/g, ' ')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join('\n')
+    .slice(0, 120000)
+    .trim();
+
+const extractReadableTextFromBuffer = (buffer) => {
+  if (!Buffer.isBuffer(buffer) || !buffer.length) return '';
+  const text = buffer.toString('utf8');
+  const readable = text
+    .replace(/[^\x09\x0A\x0D\x20-\x7E\u00A0-\u024F]/g, ' ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .split(/\n+/)
+    .map((line) => line.trim())
+    .filter((line) => /[A-Za-z0-9]{3,}/.test(line))
+    .join('\n');
+
+  return normalizeExtractedText(readable);
+};
+
+const decodePdfLiteral = (value = '') =>
+  String(value || '')
+    .replace(/\\n/g, '\n')
+    .replace(/\\r/g, '\n')
+    .replace(/\\t/g, ' ')
+    .replace(/\\\(/g, '(')
+    .replace(/\\\)/g, ')')
+    .replace(/\\\\/g, '\\');
+
+const extractBasicPdfTextFromBuffer = (buffer) => {
+  if (!Buffer.isBuffer(buffer) || !buffer.length) return '';
+  const latin = buffer.toString('latin1');
+  const chunks = [];
+  const literalPattern = /\((?:\\.|[^\\()]){3,}\)\s*T[jJ]/g;
+  let match;
+
+  while ((match = literalPattern.exec(latin)) && chunks.length < 3000) {
+    const raw = match[0].replace(/\)\s*T[jJ]$/, '').slice(1);
+    const decoded = decodePdfLiteral(raw);
+    if (/[A-Za-z0-9]{3,}/.test(decoded)) chunks.push(decoded);
+  }
+
+  if (chunks.length) return normalizeExtractedText(chunks.join('\n'));
+  return extractReadableTextFromBuffer(buffer);
+};
+
 const isLikelyGarbagePdfText = (text = '') => {
   if (!text) return true;
 
@@ -124,6 +223,7 @@ async function extractDocumentText({ fileName = '', mimeType = '', contentBase64
   }
 
   const extension = path.extname(fileName).toLowerCase();
+  const buffer = Buffer.from(contentBase64, 'base64');
   const cleanupTempFile = (tempPath) => {
     try {
       if (tempPath && fs.existsSync(tempPath)) {
@@ -136,11 +236,18 @@ async function extractDocumentText({ fileName = '', mimeType = '', contentBase64
     mimeType.startsWith('text/') ||
     ['.txt'].includes(extension)
   ) {
-    return Buffer.from(contentBase64, 'base64').toString('utf8').trim();
+    return normalizeExtractedText(buffer.toString('utf8'));
   }
 
   try {
     if (extension === '.pdf' || mimeType === 'application/pdf') {
+      try {
+        const parsedText = await extractViaPdfParse(buffer);
+        if (parsedText && !isLikelyGarbagePdfText(parsedText)) return parsedText;
+      } catch (error) {
+        console.warn(`pdf-parse extraction failed for ${fileName}:`, error.message);
+      }
+
       const mdlsTempPath = writeTempFile(fileName, contentBase64);
       try {
         const mdlsText = await extractViaMdls(mdlsTempPath);
@@ -153,21 +260,30 @@ async function extractDocumentText({ fileName = '', mimeType = '', contentBase64
       const stringsTempPath = writeTempFile(fileName, contentBase64);
       try {
         const stringsText = await extractViaStrings(stringsTempPath);
-        return isLikelyGarbagePdfText(stringsText) ? '' : stringsText;
+        if (stringsText && !isLikelyGarbagePdfText(stringsText)) return normalizeExtractedText(stringsText);
       } finally {
         cleanupTempFile(stringsTempPath);
       }
+
+      const fallbackText = extractBasicPdfTextFromBuffer(buffer);
+      return isLikelyGarbagePdfText(fallbackText) ? '' : fallbackText;
     }
 
     const tempPath = writeTempFile(fileName, contentBase64);
     try {
-      return await extractViaTextUtil(tempPath);
+      const extracted = await extractViaTextUtil(tempPath);
+      if (extracted) return normalizeExtractedText(extracted);
     } finally {
       cleanupTempFile(tempPath);
     }
+
+    return extractReadableTextFromBuffer(buffer);
   } catch (error) {
     console.error(`Document extraction error for ${fileName}:`, error.message);
-    return '';
+    if (extension === '.pdf' || mimeType === 'application/pdf') {
+      return isLikelyGarbagePdfText(extractBasicPdfTextFromBuffer(buffer)) ? '' : extractBasicPdfTextFromBuffer(buffer);
+    }
+    return extractReadableTextFromBuffer(buffer);
   }
 }
 
@@ -227,20 +343,28 @@ async function saveProductInfo(productInfoId, data) {
   if (data.targetCustomer !== undefined) updateData.targetCustomer = data.targetCustomer;
   if (data.location !== undefined) updateData.location = data.location;
   if (data.moreAboutProduct !== undefined) updateData.moreAboutProduct = data.moreAboutProduct;
+  if (data.personalization !== undefined) {
+    updateData.personalization = {
+      ...normalizePayload(existingData).personalization,
+      ...normalizePayload(data).personalization,
+    };
+  }
 
   // Preserve training assets with smart merging
   const mergedTrainingAssets = {};
   for (const key of TRAINING_ASSET_KEYS) {
     const incoming = data.trainingAssets?.[key] || {};
-    const existing = existingData.trainingAssets?.[key] || {};
-    // Only update if incoming has extractedText or fileName
-    if (incoming.extractedText || incoming.fileName) {
-      mergedTrainingAssets[key] = {
+    const existing = normalizeAsset(existingData.trainingAssets?.[key] || {});
+    // `files` is authoritative when present, including empty arrays after document removal.
+    if (Array.isArray(incoming.files)) {
+      mergedTrainingAssets[key] = normalizeAsset(incoming);
+    } else if (incoming.extractedText || incoming.fileName) {
+      mergedTrainingAssets[key] = normalizeAsset({
         fileName: incoming.fileName || existing.fileName || '',
         mimeType: incoming.mimeType || existing.mimeType || '',
         extractedText: incoming.extractedText || existing.extractedText || '',
         uploadedAt: incoming.uploadedAt || existing.uploadedAt || null,
-      };
+      });
     } else {
       // Preserve existing if nothing new provided
       mergedTrainingAssets[key] = existing;
@@ -274,4 +398,5 @@ module.exports = {
   normalizePayload,
   COLLECTION_NAME,
   CURRENT_DOC_ID,
+  DEFAULT_CUSTOMER_INSTRUCTIONS,
 };

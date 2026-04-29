@@ -3,12 +3,16 @@ const router = express.Router();
 const {
   saveProductInfo,
   getProductInfo,
-  saveTrainingAssetForProductInfo,
   normalizePayload,
   COLLECTION_NAME,
   CURRENT_DOC_ID,
 } = require('../services/productInfoService');
 const { db } = require('../config/firebase');
+const {
+  saveTrainingDocument,
+  listTrainingDocuments,
+  deleteTrainingDocument,
+} = require('../services/trainingDocumentStore');
 
 const isValidProductInfoId = (value) =>
   typeof value === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(value);
@@ -87,7 +91,10 @@ router.post('/upload-asset', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Missing required upload fields' });
     }
 
-    const asset = await saveTrainingAssetForProductInfo(CURRENT_DOC_ID, assetKey, { fileName, mimeType: mimeType || '', contentBase64 });
+    await saveTrainingDocument({ productInfoId: CURRENT_DOC_ID, assetKey, fileName, mimeType: mimeType || '', contentBase64 });
+    const files = await listTrainingDocuments(CURRENT_DOC_ID, assetKey);
+    const asset = { files };
+    await saveProductInfo(CURRENT_DOC_ID, { trainingAssets: { [assetKey]: asset } });
     res.status(201).json({ success: true, data: asset });
   } catch (error) {
     console.error('Training asset upload failed:', error);
@@ -140,10 +147,35 @@ router.post('/:productInfoId/upload-asset', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Missing required upload fields' });
     }
 
-    const asset = await saveTrainingAssetForProductInfo(productInfoId, assetKey, { fileName, mimeType: mimeType || '', contentBase64 });
+    await saveTrainingDocument({ productInfoId, assetKey, fileName, mimeType: mimeType || '', contentBase64 });
+    const files = await listTrainingDocuments(productInfoId, assetKey);
+    const asset = { files };
+    await saveProductInfo(productInfoId, { trainingAssets: { [assetKey]: asset } });
     res.status(201).json({ success: true, data: asset });
   } catch (error) {
     console.error('Training asset upload failed:', error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.delete('/:productInfoId/upload-asset/:documentId', async (req, res) => {
+  try {
+    const { productInfoId, documentId } = req.params;
+    const { assetKey } = req.query;
+    if (!isValidProductInfoId(productInfoId)) {
+      return res.status(400).json({ success: false, error: 'Invalid productInfoId' });
+    }
+    if (!assetKey) {
+      return res.status(400).json({ success: false, error: 'Missing assetKey' });
+    }
+
+    const deleted = await deleteTrainingDocument(productInfoId, documentId);
+    const files = await listTrainingDocuments(productInfoId, String(assetKey));
+    const asset = { files };
+    await saveProductInfo(productInfoId, { trainingAssets: { [assetKey]: asset } });
+    res.json({ success: true, deleted, data: asset });
+  } catch (error) {
+    console.error('Training asset delete failed:', error);
     res.status(500).json({ success: false, error: error.message });
   }
 });

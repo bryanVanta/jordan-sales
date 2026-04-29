@@ -45,22 +45,45 @@ export interface OutreachMessage {
 const getMessageTimestamp = (message: OutreachMessage) =>
   message.timestamp?.getTime?.() || message.createdAt?.getTime?.() || 0;
 
+const normalizeDedupeText = (value: string) =>
+  String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
 const dedupeConversationMessages = (messages: OutreachMessage[]): OutreachMessage[] => {
   const seen = new Set<string>();
+  const seenNearbyBody = new Map<string, number>();
 
-  return messages.filter((message) => {
+  return [...messages]
+    .sort((a, b) => getMessageTimestamp(a) - getMessageTimestamp(b))
+    .filter((message) => {
     const timestampMs = getMessageTimestamp(message);
     const mediaKey = Array.isArray(message.media)
       ? message.media.map((m) => String(m?.url || '')).filter(Boolean).join(',')
       : String((message.media as any)?.url || '');
+    const normalizedBody = normalizeDedupeText(message.messageContent || '');
+    const contactKey = message.contactWhatsApp || message.contactEmail || '';
+
+    if (normalizedBody) {
+      const nearbyKey = [
+        message.leadId || '',
+        message.channel || '',
+        message.status || '',
+        contactKey,
+        normalizedBody,
+        mediaKey,
+      ].join('::');
+      const previousTimestampMs = seenNearbyBody.get(nearbyKey);
+      if (previousTimestampMs && Math.abs(timestampMs - previousTimestampMs) <= 2 * 60 * 1000) return false;
+      seenNearbyBody.set(nearbyKey, timestampMs);
+    }
+
     const key =
       message.messageId ||
       [
         message.leadId || '',
         message.channel || '',
         message.status || '',
-        message.contactWhatsApp || message.contactEmail || '',
-        message.messageContent || '',
+        contactKey,
+        normalizedBody,
         mediaKey,
         timestampMs,
       ].join('::');
@@ -68,7 +91,7 @@ const dedupeConversationMessages = (messages: OutreachMessage[]): OutreachMessag
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
-  });
+    });
 };
 
 /**

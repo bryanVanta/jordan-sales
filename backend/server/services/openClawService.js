@@ -30,6 +30,7 @@ const OPENCLAW_CLI_PATH = (process.env.OPENCLAW_CLI_PATH || '/home/jeff/.npm-glo
 
 const OPENCLAW_JORDAN_GATEWAY_BASE_URL = process.env.OPENCLAW_JORDAN_GATEWAY_BASE_URL;
 const OPENCLAW_JORDAN_REMOTE_GATEWAY_URL = process.env.OPENCLAW_JORDAN_REMOTE_GATEWAY_URL;
+const OPENCLAW_GATEWAY_URL = process.env.OPENCLAW_GATEWAY_URL;
 const OPENCLAW_JORDAN_GATEWAY_TOKEN = process.env.OPENCLAW_JORDAN_GATEWAY_TOKEN;
 const OPENCLAW_JORDAN_ENDPOINT = process.env.OPENCLAW_JORDAN_ENDPOINT || '/jordan/find-leads';
 const OPENCLAW_JORDAN_AGENT_URL = process.env.OPENCLAW_JORDAN_AGENT_URL;
@@ -79,6 +80,23 @@ const pickProductInfoForLeadSearch = (input = {}) => {
 
 const shellEscapeSingleQuoted = (value = '') => String(value).replace(/'/g, `'\"'\"'`);
 
+const isLocalhostUrl = (value = '') => /^https?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(String(value || ''))
+  || /^ws(s)?:\/\/(localhost|127\.0\.0\.1)(:|\/|$)/i.test(String(value || ''));
+
+const withJordanEndpoint = (baseUrl = '') => {
+  if (!baseUrl) return '';
+  const base = baseUrl.replace(/\/$/, '');
+  const path = OPENCLAW_JORDAN_ENDPOINT.startsWith('/') ? OPENCLAW_JORDAN_ENDPOINT : `/${OPENCLAW_JORDAN_ENDPOINT}`;
+  return `${base}${path}`;
+};
+
+const shouldUsePublicHttpGateway = () => Boolean(
+  OPENCLAW_GATEWAY_URL &&
+  !isLocalhostUrl(OPENCLAW_GATEWAY_URL) &&
+  (!OPENCLAW_JORDAN_GATEWAY_BASE_URL || isLocalhostUrl(OPENCLAW_JORDAN_GATEWAY_BASE_URL)) &&
+  (!OPENCLAW_JORDAN_REMOTE_GATEWAY_URL || isLocalhostUrl(OPENCLAW_JORDAN_REMOTE_GATEWAY_URL))
+);
+
 const normalizeOpenClawLead = (lead = {}, fallbackLocation = '') => ({
   companyName: lead.companyName || lead.company || '',
   website: lead.website || lead.url || '',
@@ -95,10 +113,14 @@ const getJordanGatewayUrl = () => {
   
   if (OPENCLAW_JORDAN_AGENT_URL) {
     url = OPENCLAW_JORDAN_AGENT_URL;
+  } else if (
+    OPENCLAW_GATEWAY_URL &&
+    !isLocalhostUrl(OPENCLAW_GATEWAY_URL) &&
+    (!OPENCLAW_JORDAN_GATEWAY_BASE_URL || isLocalhostUrl(OPENCLAW_JORDAN_GATEWAY_BASE_URL))
+  ) {
+    url = withJordanEndpoint(OPENCLAW_GATEWAY_URL);
   } else if (OPENCLAW_JORDAN_GATEWAY_BASE_URL) {
-    const base = OPENCLAW_JORDAN_GATEWAY_BASE_URL.replace(/\/$/, '');
-    const path = OPENCLAW_JORDAN_ENDPOINT.startsWith('/') ? OPENCLAW_JORDAN_ENDPOINT : `/${OPENCLAW_JORDAN_ENDPOINT}`;
-    url = `${base}${path}`;
+    url = withJordanEndpoint(OPENCLAW_JORDAN_GATEWAY_BASE_URL);
   } else {
     return '';
   }
@@ -518,12 +540,17 @@ async function findLeadsWithOpenClawHttp(productInfo, previousCompanies = []) {
 }
 
 async function findLeadsWithOpenClaw(productInfo, previousCompanies = []) {
-  if (!OPENCLAW_JORDAN_GATEWAY_BASE_URL && !OPENCLAW_JORDAN_REMOTE_GATEWAY_URL && !OPENCLAW_JORDAN_AGENT_URL) {
+  if (!OPENCLAW_JORDAN_GATEWAY_BASE_URL && !OPENCLAW_JORDAN_REMOTE_GATEWAY_URL && !OPENCLAW_JORDAN_AGENT_URL && !OPENCLAW_GATEWAY_URL) {
     console.warn('[OpenClaw] ⚠️ No gateway configured, unable to search for leads');
     return [];
   }
 
   if (OPENCLAW_JORDAN_TRANSPORT === 'http') {
+    console.log('[OpenClaw] Using HTTP transport');
+    return findLeadsWithOpenClawHttp(productInfo, previousCompanies);
+  }
+
+  if (OPENCLAW_JORDAN_TRANSPORT !== 'rpc' && shouldUsePublicHttpGateway()) {
     console.log('[OpenClaw] Using HTTP transport');
     return findLeadsWithOpenClawHttp(productInfo, previousCompanies);
   }

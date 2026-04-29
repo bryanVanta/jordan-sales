@@ -3,6 +3,7 @@ const emailService = require('./emailService');
 const resendService = require('./resendService');
 const whatsappService = require('./whatsappService');
 const { generateSystemPrompt, callLLM } = require('./llmService');
+const { getProductInfo } = require('./productInfoService');
 const { triggerSentimentAnalysis } = require('./sentimentService');
 const { saveOutreachRecord } = require('./outreachService');
 
@@ -65,6 +66,110 @@ const buildConversationText = (messages) =>
     })
     .filter(Boolean)
     .join('\n');
+
+const normalizeContactKey = (value = '') => {
+  const raw = String(value || '').trim().toLowerCase();
+  if (!raw) return '';
+  if (raw.includes('@') && !raw.includes('@s.whatsapp.net') && !raw.includes('@g.us')) return raw;
+
+  const noPrefix = raw.startsWith('whatsapp:') ? raw.slice('whatsapp:'.length) : raw;
+  const beforeJid = noPrefix.split('@')[0];
+  const digits = beforeJid.replace(/[^\d]/g, '');
+  if (!digits) return raw;
+  if (digits.startsWith('0') && digits.length >= 9 && digits.length <= 11) return `60${digits.slice(1)}`;
+  return digits;
+};
+
+const buildContactVariants = (value = '') => {
+  const raw = String(value || '').trim();
+  const key = normalizeContactKey(raw);
+  const variants = new Set([raw]);
+
+  if (key && /^\d+$/.test(key)) {
+    variants.add(key);
+    variants.add(`+${key}`);
+    variants.add(`whatsapp:+${key}`);
+    variants.add(`${key}@s.whatsapp.net`);
+    if (key.startsWith('60')) {
+      const local = `0${key.slice(2)}`;
+      variants.add(local);
+      variants.add(`+${local}`);
+      variants.add(`whatsapp:+${local}`);
+    }
+  }
+
+  return Array.from(variants).filter(Boolean).slice(0, 10);
+};
+
+const summarizeProduct = (product = {}) => {
+  const lines = [
+    `Name: ${product.productName || 'Unnamed product'}`,
+    product.productType ? `Type: ${product.productType}` : '',
+    product.description ? `Description: ${product.description}` : '',
+    product.keyBenefit ? `Key benefit: ${product.keyBenefit}` : '',
+    product.targetCustomer ? `Target customer: ${product.targetCustomer}` : '',
+    product.location ? `Location: ${product.location}` : '',
+    product.moreAboutProduct ? `More context: ${product.moreAboutProduct}` : '',
+  ].filter(Boolean);
+
+  return lines.join('\n').slice(0, 1800);
+};
+
+async function fetchKnownProductContextsForCustomer(lead = {}, sender = '') {
+  const productIds = new Set();
+  const addProductId = (value) => {
+    const id = String(value || '').trim();
+    if (id) productIds.add(id);
+  };
+
+  addProductId(lead.productInfoId);
+
+  const contactValues = [
+    sender,
+    lead.whatsapp,
+    lead.contactWhatsApp,
+    lead.phone,
+    lead.email,
+    lead.contactEmail,
+  ].filter(Boolean);
+
+  const queryByVariants = async (collectionName, fieldName, variants) => {
+    if (!variants.length) return [];
+    try {
+      const snapshot = await db.collection(collectionName).where(fieldName, 'in', variants).limit(20).get();
+      return snapshot.docs.map((doc) => ({ id: doc.id, ...doc.data() }));
+    } catch {
+      return [];
+    }
+  };
+
+  for (const contact of contactValues) {
+    const variants = buildContactVariants(contact);
+    const leadMatches = [
+      ...(await queryByVariants('leads', 'whatsapp', variants)),
+      ...(await queryByVariants('leads', 'contactWhatsApp', variants)),
+      ...(await queryByVariants('leads', 'phone', variants)),
+      ...(await queryByVariants('leads', 'email', variants)),
+      ...(await queryByVariants('leads', 'contactEmail', variants)),
+    ];
+    leadMatches.forEach((match) => addProductId(match.productInfoId));
+
+    const outreachMatches = [
+      ...(await queryByVariants('outreach_history', 'contactWhatsApp', variants)),
+      ...(await queryByVariants('outreach_history', 'contactPhone', variants)),
+      ...(await queryByVariants('outreach_history', 'contactEmail', variants)),
+    ];
+    outreachMatches.forEach((match) => addProductId(match.productInfoId));
+  }
+
+  const products = [];
+  for (const id of Array.from(productIds).slice(0, 5)) {
+    const product = await getProductInfo(id).catch(() => null);
+    if (product) products.push({ id, ...product });
+  }
+
+  return products;
+}
 
 const looksLikeGreeting = (text) => {
   const t = String(text || '').trim().toLowerCase();
@@ -163,11 +268,14 @@ const normalizeTemperature = (value) => {
 const shouldAutoReply = (_sentiment) => true;
 
 const buildInboundFingerprint = ({ channel, sender, inboundMessage, inboundMessageId }) => {
-  if (inboundMessageId) return `message:${String(inboundMessageId).trim()}`;
-
   const normalizedChannel = String(channel || '').trim().toLowerCase();
   const normalizedSender = String(sender || '').trim().toLowerCase();
-  const normalizedBody = String(inboundMessage || '').trim().toLowerCase().slice(0, 200);
+  const normalizedBody = String(inboundMessage || '').trim().toLowerCase().replace(/\s+/g, ' ').slice(0, 200);
+
+  // OpenClaw/Baileys can emit the same inbound WhatsApp text multiple times with different IDs.
+  // Use sender+body for the auto-reply lock so one customer message cannot trigger two AI replies.
+  if (normalizedChannel !== 'whatsapp' && inboundMessageId) return `message:${String(inboundMessageId).trim()}`;
+
   return `body:${normalizedChannel}::${normalizedSender}::${normalizedBody}`;
 };
 
@@ -209,8 +317,13 @@ async function fetchRecentConversation(leadId) {
     .slice(-12);
 }
 
-async function generateAutoReplyMessage({ lead, channel, conversation, inboundMessage }) {
-  const systemPrompt = (await generateSystemPrompt()) || 'You are a helpful sales assistant for VantaTech.';
+async function generateAutoReplyMessage({ lead, channel, conversation, inboundMessage, sender = '' }) {
+  const productInfoId = String(lead?.productInfoId || '').trim() || null;
+  const systemPrompt = (await generateSystemPrompt(productInfoId)) || 'You are a helpful sales assistant for VantaTech.';
+  const knownProducts = await fetchKnownProductContextsForCustomer(lead, sender);
+  const multiProductContext = knownProducts.length
+    ? knownProducts.map((product, index) => `Product ${index + 1} (${product.id}):\n${summarizeProduct(product)}`).join('\n\n')
+    : '';
   const conversationText = buildConversationText(conversation);
   const latestInbound = String(inboundMessage || '').trim();
   const companyName = lead.company || 'your company';
@@ -262,11 +375,17 @@ Company: ${companyName}
 Conversation so far:
 ${conversationText || 'No prior conversation.'}
 
+Known products/services previously connected to this customer:
+${multiProductContext || 'Only the current product context is known.'}
+
 Latest inbound message:
 ${latestInbound}
 
 Rules:
 ${replyRules}
+- If the customer asks broadly what product/service VantaTech offers, mention all known relevant products briefly.
+- If the conversation is clearly about one product, prioritize that product and avoid confusing it with others.
+- Do not claim the products are related unless the product context says so.
 
 Return only the reply text.`;
 
@@ -389,7 +508,7 @@ async function processInboundAutoReply({
   }
 
   const conversation = await fetchRecentConversation(leadId);
-  const replyBody = await generateAutoReplyMessage({ lead, channel, conversation, inboundMessage });
+  const replyBody = await generateAutoReplyMessage({ lead, channel, conversation, inboundMessage, sender });
   if (!replyBody) return { skipped: true, reason: 'empty-reply' };
 
   try {
@@ -455,9 +574,15 @@ async function processInboundAutoReply({
   );
 
   await db.collection('leads').doc(leadId).update({
-    autoReplyLastSentAt: new Date(),
-    autoReplyLastChannel: channel,
-    needsHumanReply: false,
+    ...(sendResult?.success
+      ? {
+          autoReplyLastSentAt: new Date(),
+          autoReplyLastChannel: channel,
+          needsHumanReply: false,
+        }
+      : {
+          needsHumanReply: true,
+        }),
     lastAutoReplySourceFingerprint: inboundFingerprint,
     lastAutoReplySourceAt: new Date(),
     lastAutoReplyAttemptFingerprint: inboundFingerprint,

@@ -36,24 +36,23 @@ export async function POST(req: Request) {
       );
     }
 
+    const backendUrl = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL;
+    if (backendUrl) {
+      const proxied = await fetch(
+        `${backendUrl.replace(/\/$/, '')}/api/follow-up/send`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        }
+      );
+
+      const proxiedJson = await proxied.json().catch(() => null);
+      return Response.json(proxiedJson, { status: proxied.status });
+    }
+
     const apiKey = (process.env.RESEND_API_KEY || '').trim();
     if (!apiKey) {
-      const backendUrl =
-        process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL;
-      if (backendUrl) {
-        const proxied = await fetch(
-          `${backendUrl.replace(/\/$/, '')}/api/follow-up/send`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(body),
-          }
-        );
-
-        const proxiedJson = await proxied.json().catch(() => null);
-        return Response.json(proxiedJson, { status: proxied.status });
-      }
-
       return Response.json(
         {
           error: 'Missing RESEND_API_KEY',

@@ -7,7 +7,7 @@ const { db, admin } = require('../config/firebase');
 const { callLLM } = require('./llmService');
 
 // Configurable alert recipient — override with SALES_ALERT_WHATSAPP env var.
-const SALES_ALERT_NUMBER = (process.env.SALES_ALERT_WHATSAPP || '+60142319219').trim();
+const SALES_ALERT_NUMBER = (process.env.SALES_ALERT_WHATSAPP || process.env.SALES_ALERT_NUMBER || '+60142319219').trim();
 
 const sendLeadTemperatureAlert = async ({ companyName, sentiment, leadId, whatsapp }) => {
   try {
@@ -23,13 +23,97 @@ const sendLeadTemperatureAlert = async ({ companyName, sentiment, leadId, whatsa
     const result = await whatsappService.sendMessage(SALES_ALERT_NUMBER, message);
     if (result?.success) {
       console.log(`[Sentiment] Alert sent to ${SALES_ALERT_NUMBER} for lead ${leadId} (${sentiment})`);
+      return result;
     } else {
-      console.warn(`[Sentiment] Alert send failed for lead ${leadId}:`, result?.error);
+      console.warn(`[Sentiment] Alert send failed for lead ${leadId}:`, result?.error, result?.details || '');
+      return result || { success: false, error: 'Unknown alert send failure' };
     }
   } catch (err) {
     console.warn(`[Sentiment] Could not send temperature alert for lead ${leadId}:`, err.message);
+    return { success: false, error: err.message };
   }
 };
+
+const normalizeIntentText = (value = '') =>
+  String(value || '').trim().toLowerCase().replace(/\s+/g, ' ');
+
+const hasHotBuyingSignal = (text = '') => {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  return (
+    /\b(price|pricing|quote|quotation|proposal|invoice|payment|deposit|buy|purchase|order|contract|delivery|timeline|lead time|demo|trial)\b/.test(t) ||
+    /\b(how much|send me|can you quote|want to proceed|move forward|book|schedule)\b/.test(t)
+  );
+};
+
+const hasSubstantiveInterest = (text = '') => {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  if (hasHotBuyingSignal(t)) return true;
+  return (
+    /\b(model|capacity|ton|tons|forklift|pallet|battery|lithium|indoor|outdoor|warehouse|factory|load|height|hours|compare|spec|specs|fit|suitable|recommend|interested|tell me more|more about|explain|details|how does|how it works)\b/.test(t) ||
+    t.split(/\s+/).filter(Boolean).length >= 8
+  );
+};
+
+const hasColdSignal = (text = '') => {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  return (
+    /\b(not interested|not so interested|no longer interested|no thanks|stop|unsubscribe|wrong number|don't contact|do not contact|busy|too busy|no time|later|maybe later|not necessary|not needed)\b/.test(t) ||
+    /\bnot\b.{0,24}\binterested\b/.test(t) ||
+    /\bsorry\b.*\bbusy\b/.test(t)
+  );
+};
+
+const isGenericPermission = (text = '') => {
+  const t = normalizeIntentText(text);
+  if (!t) return false;
+  return /^(ok|okay|sure|yes|yep|yeah|make it quick|quick|send|go ahead|fine|alright|interesting|thanks|noted)\b/.test(t);
+};
+
+const scoreIntentText = (text = '') => {
+  const t = normalizeIntentText(text);
+  if (!t) return 0;
+  if (hasHotBuyingSignal(t)) return 3;
+  if (hasSubstantiveInterest(t)) return 1.4;
+  if (hasColdSignal(t)) return -2.5;
+  if (isGenericPermission(t)) return 0.2;
+  return 0;
+};
+
+const calculateWeightedSentimentFromTexts = (texts = []) => {
+  const inboundTexts = (Array.isArray(texts) ? texts : [])
+    .map(normalizeIntentText)
+    .filter(Boolean)
+    .slice(-8);
+
+  if (!inboundTexts.length) return 'neutral';
+
+  let weightedScore = 0;
+  let totalWeight = 0;
+  inboundTexts.forEach((text, index) => {
+    const recencyWeight = Math.pow(1.55, index);
+    weightedScore += scoreIntentText(text) * recencyWeight;
+    totalWeight += recencyWeight;
+  });
+
+  const normalizedScore = totalWeight ? weightedScore / totalWeight : 0;
+  const latestScore = scoreIntentText(inboundTexts[inboundTexts.length - 1] || '');
+
+  if (latestScore >= 3) return 'hot';
+  if (latestScore <= -2.5) return 'cold';
+  if (normalizedScore >= 2.1) return 'hot';
+  if (normalizedScore >= 0.75) return 'warm';
+  if (normalizedScore <= -0.9) return 'cold';
+  return 'neutral';
+};
+
+const getInboundCustomerTexts = (messages = []) =>
+  (Array.isArray(messages) ? messages : [])
+    .filter((msg) => String(msg.status || '').toLowerCase() === 'received')
+    .map((msg) => normalizeIntentText(msg.content || msg.messageContent || ''))
+    .filter(Boolean);
 
 /**
  * Analyze sentiment using AI
@@ -47,21 +131,26 @@ const analyzeSentimentWithAI = async (messages = []) => {
       return 'neutral';
     }
 
-    // Format messages for AI analysis
-    const conversationText = messages
-      .map(msg => {
-        const sender = msg.status === 'received' ? 'CUSTOMER' : 'SALES_TEAM';
-        const subject = msg.subject || msg.messageSubject ? `[${msg.subject || msg.messageSubject}]` : '';
-        const content = msg.content || msg.messageContent || '';
-        return `${sender}: ${subject}\n${content}`;
-      })
+    // Only customer messages are analyzed. Sales/team/bot replies must not make a lead warmer.
+    const customerTexts = getInboundCustomerTexts(messages);
+    if (customerTexts.length === 0) return 'neutral';
+
+    const weightedSentiment = calculateWeightedSentimentFromTexts(customerTexts);
+    const latestCustomerText = customerTexts[customerTexts.length - 1] || '';
+    if (hasColdSignal(latestCustomerText) || hasHotBuyingSignal(latestCustomerText)) {
+      return weightedSentiment;
+    }
+
+    const conversationText = customerTexts
+      .map((content, index) => `CUSTOMER MESSAGE ${index + 1}:\n${content}`)
       .join('\n\n---\n\n');
 
     // Create prompt for sentiment analysis
-    const analysisPrompt = `Analyze the following email conversation between a sales team and a potential customer. 
-Determine the customer's sentiment and interest level based on comprehensive signals.
+    const analysisPrompt = `Analyze ONLY the customer's messages below.
+Do NOT infer interest from sales team, bot, or assistant replies. They are intentionally excluded.
+Determine the customer's sentiment and interest level based only on what the customer wrote.
 
-CONVERSATION:
+CUSTOMER MESSAGES ONLY:
 ${conversationText}
 
 SENTIMENT CLASSIFICATIONS:
@@ -226,14 +315,49 @@ const analyzeSingleLead = async (leadId) => {
     console.log(`[Sentiment AI] Updated lead ${leadId}: ${sentiment} (${allMessages.length} messages)`);
 
     // Alert rules:
-    // 1. Sentiment is warm/hot AND no alert has been sent in past 24h (covers all cases including stale leads)
-    // 2. This ensures every time a customer engages and hits warm/hot, you get notified once per day max.
-    const lastAlert = leadData.lastAlertSentAt?.toDate?.() || (leadData.lastAlertSentAt ? new Date(leadData.lastAlertSentAt) : null);
-    const hoursSinceLastAlert = lastAlert ? (Date.now() - lastAlert.getTime()) / (1000 * 60 * 60) : Infinity;
-    const shouldAlert = (sentiment === 'warm' || sentiment === 'hot') && hoursSinceLastAlert >= 24;
+    // 1. Alert when a lead enters warm/hot from cold/neutral/empty.
+    // 2. Alert on warm -> hot upgrade.
+    // 3. Alert again after 24h if still warm/hot.
+    // IMPORTANT: only mark alert sent after WhatsApp send succeeds. Failed sends must be retryable.
+    const previousSentiment = String(leadData.sentiment || '').trim().toLowerCase();
+    const isWarmHot = sentiment === 'warm' || sentiment === 'hot';
+    const previousWasWarmHot = previousSentiment === 'warm' || previousSentiment === 'hot';
+    const upgradedToHot = previousSentiment === 'warm' && sentiment === 'hot';
+    const lastWarmHotAlert =
+      leadData.lastWarmHotAlertSentAt?.toDate?.() ||
+      leadData.lastAlertSentAt?.toDate?.() ||
+      (leadData.lastWarmHotAlertSentAt ? new Date(leadData.lastWarmHotAlertSentAt) : null) ||
+      (leadData.lastAlertSentAt ? new Date(leadData.lastAlertSentAt) : null);
+    const hoursSinceWarmHotAlert = lastWarmHotAlert
+      ? (Date.now() - lastWarmHotAlert.getTime()) / (1000 * 60 * 60)
+      : Infinity;
+    const shouldAlert =
+      isWarmHot &&
+      (!previousWasWarmHot || upgradedToHot || !lastWarmHotAlert || hoursSinceWarmHotAlert >= 24);
+
     if (shouldAlert) {
-      await db.collection('leads').doc(leadId).update({ lastAlertSentAt: new Date() });
-      sendLeadTemperatureAlert({ companyName, sentiment, leadId, whatsapp: leadData.whatsapp || '' }).catch(() => {});
+      const alertResult = await sendLeadTemperatureAlert({
+        companyName,
+        sentiment,
+        leadId,
+        whatsapp: leadData.whatsapp || leadData.contactWhatsApp || leadData.phone || '',
+      });
+
+      if (alertResult?.success) {
+        await db.collection('leads').doc(leadId).update({
+          lastWarmHotAlertSentAt: new Date(),
+          lastWarmHotAlertSentiment: sentiment,
+          lastWarmHotAlertStatus: 'sent',
+          lastWarmHotAlertError: admin.firestore.FieldValue.delete(),
+          lastAlertSentAt: new Date(),
+        });
+      } else {
+        await db.collection('leads').doc(leadId).update({
+          lastWarmHotAlertSentiment: sentiment,
+          lastWarmHotAlertStatus: 'failed',
+          lastWarmHotAlertError: alertResult?.error || 'Unknown alert send failure',
+        });
+      }
     }
 
     return sentiment;

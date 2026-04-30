@@ -8,10 +8,26 @@ const router = express.Router();
 const { db } = require('../config/firebase');
 const resendService = require('../services/resendService');
 const { processInboundAutoReply } = require('../services/autoReplyService');
+const { triggerSentimentAnalysis } = require('../services/sentimentService');
 const { maybeStoreInboundMedia } = require('../services/mediaStorageService');
 const { transcribeAudioUrl } = require('../services/elevenLabsSttService');
 
 const WHATSAPP_DUPLICATE_BODY_WINDOW_MS = 2 * 60 * 1000;
+
+const triggerSentimentBestEffort = ({ leadId, contact, channel }) => {
+  if (!leadId) return;
+  setImmediate(() => {
+    triggerSentimentAnalysis(String(leadId), String(contact || ''))
+      .then((sentiment) => {
+        if (sentiment) {
+          console.log(`[Webhook] ${channel} sentiment updated for lead ${leadId}: ${sentiment}`);
+        } else {
+          console.log(`[Webhook] ${channel} sentiment analysis skipped/empty for lead ${leadId}`);
+        }
+      })
+      .catch((err) => console.error(`[Webhook] Error running ${channel} sentiment analysis for lead ${leadId}:`, err.message));
+  });
+};
 
 /**
  * POST /api/webhooks/inbound-email
@@ -100,6 +116,8 @@ router.post('/inbound-email', async (req, res) => {
     console.log(`[Webhook] Inbound email also saved to outreach_history for chat display`);
 
     if (leadId) {
+      triggerSentimentBestEffort({ leadId, contact: inboundEmail.sender, channel: 'email' });
+
       processInboundAutoReply({
         leadId,
         channel: 'email',
@@ -566,6 +584,10 @@ router.post('/inbound-whatsapp', async (req, res) => {
       Boolean(audioItem) && !transcript && /^\[media\]$/i.test(String(resolvedBody || '').trim());
 
     if (leadId) {
+      if (!isVoiceWithoutTranscript) {
+        triggerSentimentBestEffort({ leadId, contact: from, channel: 'whatsapp' });
+      }
+
       if (isVoiceWithoutTranscript) {
         // Queue STT in the background (don't block webhook response). If STT succeeds, we can auto-reply
         // using the transcript; otherwise we keep the "needsHumanReply" flag.
@@ -608,6 +630,8 @@ router.post('/inbound-whatsapp', async (req, res) => {
             } catch {
               // ignore mirror patch
             }
+
+            triggerSentimentBestEffort({ leadId, contact: from, channel: 'whatsapp' });
 
             // Now that we have transcript, run auto-reply.
             db.collection('leads').doc(leadId).update({ aiTyping: true, aiTypingStartedAt: new Date() }).catch(() => {});

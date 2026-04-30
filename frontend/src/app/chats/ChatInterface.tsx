@@ -28,6 +28,7 @@ import { db } from "@/lib/firebase";
 import { addDoc, collection, onSnapshot } from "firebase/firestore";
 
 const API_BASE_URL = `/api`; // Use Next.js API routes (works on Vercel)
+const USE_BROWSER_FIRESTORE_LISTENERS = false;
 
 interface Message {
   id: string;
@@ -271,6 +272,18 @@ const sentimentToTemperature = (sentiment?: 'hot' | 'warm' | 'neutral' | 'cold')
   }
 };
 
+const hasInboundReply = (messages: Message[]) =>
+  Array.isArray(messages) && messages.some((message) => message.sender === 'user');
+
+const resolveDisplaySentiment = (
+  storedSentiment: StoredSentiment | null,
+  messages: Message[]
+): 'hot' | 'warm' | 'neutral' | 'cold' => {
+  const fallbackSentiment = calculateSentiment(messages);
+  if (!hasInboundReply(messages)) return fallbackSentiment;
+  return storedSentiment || fallbackSentiment;
+};
+
 const ChatInterface = () => {
   const searchParams = useSearchParams();
   const platformFromUrl = (searchParams?.get('platform') || 'email') as 'email' | 'whatsapp' | 'telegram';
@@ -346,9 +359,102 @@ const ChatInterface = () => {
     setSentimentCounts(getSentimentCountsFromCustomers(allCustomers));
   }, [allCustomers, selectedChannel]);
 
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const loadChatsFromBackend = async () => {
+      try {
+        setLoadingChats(true);
+        const response = await fetch(`${API_BASE_URL}/chats?channel=${encodeURIComponent(selectedChannel)}`, {
+          cache: 'no-store',
+        });
+        if (!response.ok) throw new Error(`Chat load failed (${response.status})`);
+
+        const json: any = await response.json().catch(() => null);
+        const chats = Array.isArray(json?.chats) ? json.chats : [];
+        const customers: CustomerData[] = chats.map((chat: any, index: number) => {
+          const messagesList: Message[] = (Array.isArray(chat.messages) ? chat.messages : [])
+            .map((msg: any) => {
+              const timestampMs = Number(msg.timestampMs || 0) || Date.parse(msg.timestamp || msg.createdAt || '') || 0;
+              const date = timestampMs ? new Date(timestampMs) : null;
+              const media = normalizeMediaList(msg.media);
+              const contentRaw = selectedChannel === 'whatsapp'
+                ? String(msg.messageContent || '')
+                : `[${msg.messageSubject || 'Email'}]\n\n${String(msg.messageContent || '')}`;
+              const content = isMediaPlaceholderText(contentRaw) && media.length ? '' : contentRaw;
+              return {
+                id: msg.messageId || msg.id || `${index}-${timestampMs}`,
+                sender: (msg.status === 'received' ? 'user' : 'bot') as 'user' | 'bot',
+                text: content,
+                time: date ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Unknown time',
+                timestampMs,
+                media: media.length ? media : undefined,
+                transcript: msg.transcript ?? null,
+              };
+            })
+            .sort((a: Message, b: Message) => (a.timestampMs || 0) - (b.timestampMs || 0));
+
+          const storedSentiment = normalizeSentiment(chat.sentiment || chat.leadTemperature || chat.temp);
+          const sentiment = resolveDisplaySentiment(storedSentiment, messagesList);
+          const latest = messagesList[messagesList.length - 1];
+          const typingStartedMs = Date.parse(chat.aiTypingStartedAt || '');
+          const aiTyping = Boolean(chat.aiTyping) && (!typingStartedMs || Date.now() - typingStartedMs <= 2 * 60 * 1000);
+
+          return {
+            id: index + 1,
+            firebaseLeadId: chat.firebaseLeadId || '',
+            name: chat.contactPerson || 'Unknown',
+            email: selectedChannel === 'whatsapp'
+              ? normalizeWhatsAppContact(chat.contactWhatsApp || chat.whatsapp || chat.contactEmail || '') || chat.contactWhatsApp || chat.whatsapp || chat.contactEmail || ''
+              : chat.contactEmail || '',
+            company: chat.company || 'Unknown Company',
+            time: latest?.time || 'Just now',
+            messages: messagesList,
+            media: [],
+            progress: [],
+            temperature: sentimentToTemperature(sentiment),
+            sentiment,
+            channel: selectedChannel,
+            manualReplyMode: Boolean(chat.manualReplyMode),
+            aiTyping,
+            whatsapp: chat.whatsapp || chat.contactWhatsApp || '',
+            contactWhatsApp: chat.contactWhatsApp || chat.whatsapp || '',
+          };
+        });
+
+        if (cancelled) return;
+        setAllCustomers(customers);
+        setLoadedCustomerIds(new Set(customers.map((customer) => customer.id)));
+        setSelectedCustomerId((prev) => {
+          if (customers.length === 0) return 1;
+          return customers.some((customer) => customer.id === prev) ? prev : customers[0].id;
+        });
+      } catch (error) {
+        if (!cancelled) {
+          console.error('[Chat] Backend chat load failed:', error);
+          setAllCustomers([]);
+        }
+      } finally {
+        if (!cancelled) setLoadingChats(false);
+      }
+    };
+
+    setLoadedCustomerIds(new Set());
+    setSelectedCustomerId(1);
+    loadChatsFromBackend();
+    timer = setInterval(loadChatsFromBackend, 15000);
+
+    return () => {
+      cancelled = true;
+      if (timer) clearInterval(timer);
+    };
+  }, [selectedChannel]);
+
   // Real-time listener on `leads` collection — updates sentiment icons and manualReplyMode
   // without requiring a page refresh or waiting for the next outreach/inbound snapshot.
   useEffect(() => {
+    if (!USE_BROWSER_FIRESTORE_LISTENERS) return;
     const leadsRef = collection(db, 'leads');
     const unsubscribe = onSnapshot(leadsRef, (snapshot) => {
       snapshot.docChanges().forEach((change) => {
@@ -432,6 +538,7 @@ const ChatInterface = () => {
 
   // Keep the sidebar and active conversation live as Firestore changes.
   useEffect(() => {
+    if (!USE_BROWSER_FIRESTORE_LISTENERS) return;
     let cancelled = false;
 
     const rebuildCustomers = async (outreachSnapshot: any, inboundSnapshot?: any) => {
@@ -652,6 +759,10 @@ const ChatInterface = () => {
   // Load outreach messages from Firebase when customer is selected
   useEffect(() => {
     const loadOutreachMessages = async () => {
+      if (!USE_BROWSER_FIRESTORE_LISTENERS) {
+        setLoadedCustomerIds(prev => new Set(prev).add(selectedCustomerId));
+        return;
+      }
       // Skip if already loaded for this customer to prevent duplicates
       if (loadedCustomerIds.has(selectedCustomerId)) {
         console.log(`[Chat] Already loaded messages for customer ${selectedCustomerId}, skipping...`);
@@ -813,7 +924,7 @@ const ChatInterface = () => {
         const result = details || ({} as any);
         console.log('Message sent successfully', result);
 
-        if (!isWhatsApp) {
+        if (USE_BROWSER_FIRESTORE_LISTENERS && !isWhatsApp) {
           // Best-effort: persist outbound email for conversation history (Resend route doesn't write to Firestore)
           try {
             const subject = `Follow-up: ${currentCustomer.company}`;

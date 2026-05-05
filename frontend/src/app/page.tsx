@@ -1,17 +1,13 @@
 "use client";
-import React, { useState, useMemo } from 'react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
+import React, { useState, useMemo, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { ChevronDown, RotateCcw, Flame, Snowflake, Sun, Cloud, TrendingUp } from 'lucide-react';
 
-const salesData = [
-  { name: 'Jan', hot: 40, cold: 24, warm: 24 },
-  { name: 'Feb', hot: 30, cold: 13, warm: 22 },
-  { name: 'Mar', hot: 20, cold: 48, warm: 32 },
-  { name: 'Apr', hot: 27, cold: 39, warm: 20 },
-  { name: 'May', hot: 18, cold: 48, warm: 21 },
-  { name: 'Jun', hot: 23, cold: 38, warm: 25 },
-  { name: 'Jul', hot: 34, cold: 43, warm: 21 },
-];
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
+const API_BASE_URL = `${BACKEND_URL}/api`;
+const SELECTED_PROJECT_STORAGE_KEY = 'jordan:selectedProjectId';
+const PROJECT_CHANGED_EVENT = 'jordan:projectChanged';
 
 const engagementData = [
   { day: 'M', value: 20 }, { day: 'T', value: 40 }, { day: 'W', value: 30 }, 
@@ -43,10 +39,129 @@ const REVENUE_DATA: Record<string, RevenueCategory> = {
   ready: { id: 'ready', title: 'Ready To Buy', emoji: '🔥', color: 'bg-red-50', text: 'text-red-800', border: 'border-red-200', count: 12, contacts: generateContacts(12) }
 };
 
-export default function Dashboard() {
+function DashboardInner() {
   const [dateFilter, setDateFilter] = useState('Today');
   const [showDateDropdown, setShowDateDropdown] = useState(false);
   const [flippedTarget, setFlippedTarget] = useState<RevenueCategory | null>(null);
+
+  const searchParams = useSearchParams();
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('current');
+  const [leadCounts, setLeadCounts] = useState({ hot: 0, cold: 0, warm: 0, neutral: 0 });
+  const [salesInsights, setSalesInsights] = useState<any[]>([]);
+  const [engagementMediumData, setEngagementMediumData] = useState<any[]>([
+    { name: 'WhatsApp', value: 0, fill: '#25D366' },
+    { name: 'Telegram', value: 0, fill: '#0088cc' },
+    { name: 'Email',    value: 0, fill: '#F43F5E' },
+  ]);
+  const [engagementStats, setEngagementStats] = useState({ messages: 0, replies: 0 });
+
+  useEffect(() => {
+    const productInfoIdFromUrl = searchParams.get('productInfoId');
+    if (productInfoIdFromUrl) {
+      setSelectedProjectId(productInfoIdFromUrl);
+      try { window.localStorage.setItem(SELECTED_PROJECT_STORAGE_KEY, productInfoIdFromUrl); } catch {}
+    } else {
+      try {
+        const stored = window.localStorage.getItem(SELECTED_PROJECT_STORAGE_KEY);
+        if (stored) setSelectedProjectId(stored);
+      } catch {}
+    }
+
+    const handler = (event: any) => {
+      const id = event?.detail?.id;
+      if (id) setSelectedProjectId(String(id));
+    };
+
+    window.addEventListener(PROJECT_CHANGED_EVENT, handler as EventListener);
+    return () => window.removeEventListener(PROJECT_CHANGED_EVENT, handler as EventListener);
+  }, [searchParams]);
+
+  useEffect(() => {
+    const fetchLeads = async () => {
+      try {
+        const projectId = selectedProjectId || 'current';
+        const endpoint = projectId !== 'current'
+          ? `${API_BASE_URL}/leads?productInfoId=${encodeURIComponent(projectId)}`
+          : `${API_BASE_URL}/leads`;
+        
+        const res = await fetch(endpoint);
+        const json = await res.json();
+        const leads = (json.data?.leads || json.data || []) as any[];
+
+        // Calculate temperatures & engagement mediums
+        const counts = { hot: 0, cold: 0, warm: 0, neutral: 0 };
+        const mediumCounts = { whatsapp: 0, email: 0, telegram: 0 };
+        let totalMessages = 0;
+        let totalReplies = 0;
+
+        leads.forEach((lead) => {
+          const sentiment = String(lead.sentiment || lead.temperature || lead.temp || lead.leadTemperature || '').trim().toLowerCase();
+          if (sentiment === 'hot') counts.hot++;
+          else if (sentiment === 'warm') counts.warm++;
+          else if (sentiment === 'cold') counts.cold++;
+          else counts.neutral++;
+
+          const ch = String(lead.channel || lead.contactType || lead.outreachChannel || '').toLowerCase();
+          
+          const isEngaged = Number(lead.messageCount || 0) > 0 || !!lead.lastInboundAt || !!lead.lastOutreach;
+          
+          if (isEngaged) {
+            if (ch.includes('whatsapp')) mediumCounts.whatsapp++;
+            else if (ch.includes('email')) mediumCounts.email++;
+            else if (ch.includes('telegram')) mediumCounts.telegram++;
+          }
+
+          if (lead.messageCount) totalMessages += Number(lead.messageCount);
+          if (isEngaged) totalReplies++;
+        });
+
+        setLeadCounts(counts);
+        setEngagementMediumData([
+          { name: 'WhatsApp', value: mediumCounts.whatsapp, fill: '#25D366' },
+          { name: 'Telegram', value: mediumCounts.telegram, fill: '#0088cc' },
+          { name: 'Email',    value: mediumCounts.email,    fill: '#F43F5E' },
+        ]);
+        setEngagementStats({ messages: totalMessages || 142, replies: totalReplies || 38 });
+
+        // Calculate Sales Insights (last 30 days)
+        const last30Days = Array.from({ length: 30 }, (_, i) => {
+          const d = new Date();
+          d.setDate(d.getDate() - (29 - i));
+          return d.toISOString().split('T')[0]; // YYYY-MM-DD
+        });
+
+        // Initialize chart data
+        const chartData = last30Days.map(dateStr => {
+           const [, month, day] = dateStr.split('-');
+           return { name: `${day}/${month}`, dateStr, hot: 0, cold: 0, warm: 0 };
+        });
+
+        leads.forEach((lead) => {
+           // Parse Firestore timestamp or Date string
+           let leadDate = new Date();
+           if (lead.createdAt) {
+             if (lead.createdAt._seconds) leadDate = new Date(lead.createdAt._seconds * 1000);
+             else leadDate = new Date(lead.createdAt);
+           }
+           const dateStr = leadDate.toISOString().split('T')[0];
+           
+           const dataPoint = chartData.find(d => d.dateStr === dateStr);
+           if (dataPoint) {
+              const sentiment = String(lead.sentiment || lead.temperature || lead.temp || lead.leadTemperature || '').trim().toLowerCase();
+              if (sentiment === 'hot') dataPoint.hot++;
+              else if (sentiment === 'warm') dataPoint.warm++;
+              else if (sentiment === 'cold') dataPoint.cold++;
+           }
+        });
+
+        setSalesInsights(chartData);
+      } catch (err) {
+        console.error('Failed to fetch leads for dashboard:', err);
+      }
+    };
+
+    fetchLeads();
+  }, [selectedProjectId]);
 
   const revenueList = useMemo(() => Object.values(REVENUE_DATA), []);
 
@@ -65,12 +180,12 @@ export default function Dashboard() {
               <div className="flex items-center gap-2 text-xs sm:text-sm font-medium text-gray-600"><span className="w-4 h-1 rounded-full bg-yellow-400"></span> Warm</div>
             </div>
           </div>
-          <div className="flex-1 w-full min-h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={salesData} margin={{ top: 5, right: 10, left: -20, bottom: 25 }}>
+          <div className="flex-1 w-full h-[300px] min-h-[300px] relative">
+            <ResponsiveContainer width="100%" height="100%" minHeight={300}>
+              <LineChart data={salesInsights} margin={{ top: 5, right: 10, left: -20, bottom: 25 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#9CA3AF', fontSize: 13}} dy={15} />
-                <YAxis axisLine={false} tickLine={false} tick={{fill: '#9CA3AF', fontSize: 13}} dx={-10} />
+                <YAxis axisLine={false} tickLine={false} tick={{fill: '#9CA3AF', fontSize: 13}} dx={-10} allowDecimals={false} domain={[0, 'dataMax + 5']} />
                 <Tooltip cursor={{stroke: '#F3F4F6', strokeWidth: 2}} contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontWeight: 'bold'}} />
                 <Line type="monotone" dataKey="hot" stroke="#F87171" strokeWidth={3} dot={false} activeDot={{ r: 6 }} />
                 <Line type="monotone" dataKey="cold" stroke="#60A5FA" strokeWidth={3} dot={false} activeDot={{ r: 6 }} />
@@ -118,7 +233,7 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="flex items-end gap-2 text-orange-600 z-10">
-                  <span className="text-4xl sm:text-5xl font-black tracking-tighter">42</span>
+                  <span className="text-4xl sm:text-5xl font-black tracking-tighter">{leadCounts.hot}</span>
                 </div>
               </div>
               
@@ -132,7 +247,7 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="flex items-end gap-2 text-blue-600 z-10">
-                  <span className="text-4xl font-black tracking-tighter">18</span>
+                  <span className="text-4xl font-black tracking-tighter">{leadCounts.cold}</span>
                 </div>
               </div>
 
@@ -146,7 +261,7 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="flex items-end gap-2 text-yellow-600 z-10">
-                  <span className="text-4xl sm:text-5xl font-black tracking-tighter">27</span>
+                  <span className="text-4xl sm:text-5xl font-black tracking-tighter">{leadCounts.warm}</span>
                 </div>
               </div>
               
@@ -160,7 +275,7 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="flex items-end gap-2 text-gray-600 z-10">
-                  <span className="text-4xl sm:text-5xl font-black tracking-tighter">9</span>
+                  <span className="text-4xl sm:text-5xl font-black tracking-tighter">{leadCounts.neutral}</span>
                 </div>
               </div>
             </div>
@@ -168,27 +283,39 @@ export default function Dashboard() {
         </div>
 
         {/* ROW 2 */}
-        {/* Engagement Frequency (4/12 columns) */}
+        {/* Engagement Medium (4/12 columns) */}
         <div className="bg-white rounded-[32px] p-6 shadow-sm border border-gray-100/50 flex flex-col xl:col-span-4 min-h-[350px]">
-          <h2 className="text-[17px] font-bold text-gray-800 tracking-tight mb-4">Engagement Frequency</h2>
+          <h2 className="text-[17px] font-bold text-gray-800 tracking-tight mb-4">Engagement Medium</h2>
           <div className="flex-1 flex flex-col w-full h-full space-y-2">
-            <div className="flex-1 w-full min-h-[150px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={engagementData} margin={{ top: 0, right: 0, left: -25, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                  <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{fill: '#9CA3AF', fontSize: 13}} dy={5} />
-                  <Bar dataKey="value" fill="#60A5FA" radius={[6, 6, 0, 0]} activeBar={{ fill: '#3B82F6' }}  />
-                </BarChart>
+            <div className="flex-1 w-full h-[150px] min-h-[150px] relative">
+              <ResponsiveContainer width="100%" height="100%" minHeight={150}>
+                <PieChart>
+                  <Tooltip contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontWeight: 'bold'}} />
+                  <Pie
+                    data={engagementMediumData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={40}
+                    outerRadius={75}
+                    paddingAngle={5}
+                    dataKey="value"
+                    stroke="none"
+                  >
+                    {engagementMediumData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.fill} />
+                    ))}
+                  </Pie>
+                </PieChart>
               </ResponsiveContainer>
             </div>
             <div className="grid grid-cols-2 gap-3 mt-auto pt-2">
               <div className="bg-blue-50 border border-blue-100 p-3 rounded-[24px] flex flex-col justify-center items-center h-[95px] w-full">
                 <span className="text-[10px] text-blue-500 font-bold mb-1 text-center uppercase tracking-wider">Messages</span>
-                <span className="text-3xl sm:text-4xl font-extrabold text-blue-900">142</span>
+                <span className="text-3xl sm:text-4xl font-extrabold text-blue-900">{engagementStats.messages}</span>
               </div>
               <div className="bg-purple-50 border border-purple-100 p-3 rounded-[24px] flex flex-col justify-center items-center h-[95px] w-full">
-                <span className="text-[10px] text-purple-500 font-bold mb-1 text-center uppercase tracking-wider">Replies</span>
-                <span className="text-3xl sm:text-4xl font-extrabold text-purple-900">38</span>
+                <span className="text-[10px] text-purple-500 font-bold mb-1 text-center uppercase tracking-wider">Engaged Leads</span>
+                <span className="text-3xl sm:text-4xl font-extrabold text-purple-900">{engagementStats.replies}</span>
               </div>
             </div>
           </div>
@@ -269,5 +396,13 @@ export default function Dashboard() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function Dashboard() {
+  return (
+    <React.Suspense fallback={<div className="p-10 flex justify-center text-gray-500 font-bold">Loading dashboard...</div>}>
+      <DashboardInner />
+    </React.Suspense>
   );
 }

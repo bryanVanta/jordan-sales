@@ -1,17 +1,13 @@
 "use client";
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
 import { ChevronDown, RotateCcw, Flame, Snowflake, Sun, Cloud, TrendingUp } from 'lucide-react';
 
-const salesData = [
-  { name: 'Jan', hot: 40, cold: 24, warm: 24 },
-  { name: 'Feb', hot: 30, cold: 13, warm: 22 },
-  { name: 'Mar', hot: 20, cold: 48, warm: 32 },
-  { name: 'Apr', hot: 27, cold: 39, warm: 20 },
-  { name: 'May', hot: 18, cold: 48, warm: 21 },
-  { name: 'Jun', hot: 23, cold: 38, warm: 25 },
-  { name: 'Jul', hot: 34, cold: 43, warm: 21 },
-];
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
+const API_BASE_URL = `${BACKEND_URL}/api`;
+const SELECTED_PROJECT_STORAGE_KEY = 'jordan:selectedProjectId';
+const PROJECT_CHANGED_EVENT = 'jordan:projectChanged';
 
 const engagementData = [
   { day: 'M', value: 20 }, { day: 'T', value: 40 }, { day: 'W', value: 30 }, 
@@ -43,10 +39,99 @@ const REVENUE_DATA: Record<string, RevenueCategory> = {
   ready: { id: 'ready', title: 'Ready To Buy', emoji: '🔥', color: 'bg-red-50', text: 'text-red-800', border: 'border-red-200', count: 12, contacts: generateContacts(12) }
 };
 
-export default function Dashboard() {
+function DashboardInner() {
   const [dateFilter, setDateFilter] = useState('Today');
   const [showDateDropdown, setShowDateDropdown] = useState(false);
   const [flippedTarget, setFlippedTarget] = useState<RevenueCategory | null>(null);
+
+  const searchParams = useSearchParams();
+  const [selectedProjectId, setSelectedProjectId] = useState<string>('current');
+  const [leadCounts, setLeadCounts] = useState({ hot: 0, cold: 0, warm: 0, neutral: 0 });
+  const [salesInsights, setSalesInsights] = useState<any[]>([]);
+
+  useEffect(() => {
+    const productInfoIdFromUrl = searchParams.get('productInfoId');
+    if (productInfoIdFromUrl) {
+      setSelectedProjectId(productInfoIdFromUrl);
+      try { window.localStorage.setItem(SELECTED_PROJECT_STORAGE_KEY, productInfoIdFromUrl); } catch {}
+    } else {
+      try {
+        const stored = window.localStorage.getItem(SELECTED_PROJECT_STORAGE_KEY);
+        if (stored) setSelectedProjectId(stored);
+      } catch {}
+    }
+
+    const handler = (event: any) => {
+      const id = event?.detail?.id;
+      if (id) setSelectedProjectId(String(id));
+    };
+
+    window.addEventListener(PROJECT_CHANGED_EVENT, handler as EventListener);
+    return () => window.removeEventListener(PROJECT_CHANGED_EVENT, handler as EventListener);
+  }, [searchParams]);
+
+  useEffect(() => {
+    const fetchLeads = async () => {
+      try {
+        const projectId = selectedProjectId || 'current';
+        const endpoint = projectId !== 'current'
+          ? `${API_BASE_URL}/leads?productInfoId=${encodeURIComponent(projectId)}`
+          : `${API_BASE_URL}/leads`;
+        
+        const res = await fetch(endpoint);
+        const json = await res.json();
+        const leads = (json.data?.leads || json.data || []) as any[];
+
+        // Calculate temperatures
+        const counts = { hot: 0, cold: 0, warm: 0, neutral: 0 };
+        leads.forEach((lead) => {
+          const sentiment = String(lead.sentiment || lead.temperature || lead.temp || lead.leadTemperature || '').trim().toLowerCase();
+          if (sentiment === 'hot') counts.hot++;
+          else if (sentiment === 'warm') counts.warm++;
+          else if (sentiment === 'cold') counts.cold++;
+          else counts.neutral++;
+        });
+        setLeadCounts(counts);
+
+        // Calculate Sales Insights (last 30 days)
+        const last30Days = Array.from({ length: 30 }, (_, i) => {
+          const d = new Date();
+          d.setDate(d.getDate() - (29 - i));
+          return d.toISOString().split('T')[0]; // YYYY-MM-DD
+        });
+
+        // Initialize chart data
+        const chartData = last30Days.map(dateStr => {
+           const [, month, day] = dateStr.split('-');
+           return { name: `${day}/${month}`, dateStr, hot: 0, cold: 0, warm: 0 };
+        });
+
+        leads.forEach((lead) => {
+           // Parse Firestore timestamp or Date string
+           let leadDate = new Date();
+           if (lead.createdAt) {
+             if (lead.createdAt._seconds) leadDate = new Date(lead.createdAt._seconds * 1000);
+             else leadDate = new Date(lead.createdAt);
+           }
+           const dateStr = leadDate.toISOString().split('T')[0];
+           
+           const dataPoint = chartData.find(d => d.dateStr === dateStr);
+           if (dataPoint) {
+              const sentiment = String(lead.sentiment || lead.temperature || lead.temp || lead.leadTemperature || '').trim().toLowerCase();
+              if (sentiment === 'hot') dataPoint.hot++;
+              else if (sentiment === 'warm') dataPoint.warm++;
+              else if (sentiment === 'cold') dataPoint.cold++;
+           }
+        });
+
+        setSalesInsights(chartData);
+      } catch (err) {
+        console.error('Failed to fetch leads for dashboard:', err);
+      }
+    };
+
+    fetchLeads();
+  }, [selectedProjectId]);
 
   const revenueList = useMemo(() => Object.values(REVENUE_DATA), []);
 
@@ -67,7 +152,7 @@ export default function Dashboard() {
           </div>
           <div className="flex-1 w-full min-h-[300px]">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={salesData} margin={{ top: 5, right: 10, left: -20, bottom: 25 }}>
+              <LineChart data={salesInsights} margin={{ top: 5, right: 10, left: -20, bottom: 25 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#9CA3AF', fontSize: 13}} dy={15} />
                 <YAxis axisLine={false} tickLine={false} tick={{fill: '#9CA3AF', fontSize: 13}} dx={-10} />
@@ -118,7 +203,7 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="flex items-end gap-2 text-orange-600 z-10">
-                  <span className="text-4xl sm:text-5xl font-black tracking-tighter">42</span>
+                  <span className="text-4xl sm:text-5xl font-black tracking-tighter">{leadCounts.hot}</span>
                 </div>
               </div>
               
@@ -132,7 +217,7 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="flex items-end gap-2 text-blue-600 z-10">
-                  <span className="text-4xl font-black tracking-tighter">18</span>
+                  <span className="text-4xl font-black tracking-tighter">{leadCounts.cold}</span>
                 </div>
               </div>
 
@@ -146,7 +231,7 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="flex items-end gap-2 text-yellow-600 z-10">
-                  <span className="text-4xl sm:text-5xl font-black tracking-tighter">27</span>
+                  <span className="text-4xl sm:text-5xl font-black tracking-tighter">{leadCounts.warm}</span>
                 </div>
               </div>
               
@@ -160,7 +245,7 @@ export default function Dashboard() {
                   </div>
                 </div>
                 <div className="flex items-end gap-2 text-gray-600 z-10">
-                  <span className="text-4xl sm:text-5xl font-black tracking-tighter">9</span>
+                  <span className="text-4xl sm:text-5xl font-black tracking-tighter">{leadCounts.neutral}</span>
                 </div>
               </div>
             </div>
@@ -269,5 +354,13 @@ export default function Dashboard() {
         </div>
       </div>
     </main>
+  );
+}
+
+export default function Dashboard() {
+  return (
+    <React.Suspense fallback={<div className="p-10 flex justify-center text-gray-500 font-bold">Loading dashboard...</div>}>
+      <DashboardInner />
+    </React.Suspense>
   );
 }

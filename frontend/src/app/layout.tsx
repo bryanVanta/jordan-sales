@@ -27,7 +27,7 @@ export default function RootLayout({
               </div>
 
               {/* Footer with buttons and BottomNav on same line */}
-              <div className="shrink-0 flex items-center justify-between px-6 py-3 bg-white">
+              <div className="shrink-0 flex items-center justify-between px-6 py-3 bg-white relative z-10">
                 <div id="leads-buttons" className="flex-1" />
                 <div className="flex-1 flex items-center justify-center">
                   <BottomNav />

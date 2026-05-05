@@ -297,7 +297,7 @@ const ChatInterface = () => {
   const [activeView, setActiveView] = useState<'list' | 'chat' | 'info'>('list');
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [sendingMessage, setSendingMessage] = useState(false);
-  const [loadedCustomerIds, setLoadedCustomerIds] = useState<Set<number>>(new Set());
+  const loadedCustomerIdsRef = useRef<Set<number>>(new Set());
   const [sentimentCounts, setSentimentCounts] = useState({ hot: 0, warm: 0, neutral: 0, cold: 0 });
   const [selectedChannel, setSelectedChannel] = useState<'email' | 'whatsapp' | 'telegram'>(platformFromUrl);
   const [togglingReplyMode, setTogglingReplyMode] = useState(false);
@@ -425,7 +425,7 @@ const ChatInterface = () => {
 
         if (cancelled) return;
         setAllCustomers(customers);
-        setLoadedCustomerIds(new Set(customers.map((customer) => customer.id)));
+        loadedCustomerIdsRef.current = new Set(customers.map((customer) => customer.id));
         setSelectedCustomerId((prev) => {
           if (customers.length === 0) return 1;
           return customers.some((customer) => customer.id === prev) ? prev : customers[0].id;
@@ -440,7 +440,7 @@ const ChatInterface = () => {
       }
     };
 
-    setLoadedCustomerIds(new Set());
+    loadedCustomerIdsRef.current = new Set();
     setSelectedCustomerId(1);
     loadChatsFromBackend();
     timer = setInterval(loadChatsFromBackend, 15000);
@@ -688,20 +688,16 @@ const ChatInterface = () => {
             };
           });
         });
-        setLoadedCustomerIds(new Set(leadsWithMessages.map((lead) => lead.id)));
+        loadedCustomerIdsRef.current = new Set(leadsWithMessages.map((lead) => lead.id));
         setLoadingChats(false);
 
         setSelectedCustomerId((prev) => {
           if (leadsWithMessages.length === 0) return 1;
+          // If the previously selected id still exists in the new list, keep it
           const existing = leadsWithMessages.find((lead) => lead.id === prev);
           if (existing) return prev;
-
-          const currentLeadId = currentCustomer?.firebaseLeadId;
-          const matchingLead = currentLeadId
-            ? leadsWithMessages.find((lead) => lead.firebaseLeadId === currentLeadId)
-            : undefined;
-
-          return matchingLead?.id || leadsWithMessages[0].id;
+          // Otherwise fall back to the first lead
+          return leadsWithMessages[0].id;
         });
       } catch (error) {
         if (!cancelled) {
@@ -746,7 +742,7 @@ const ChatInterface = () => {
       latestInboundSnapshot = null;
     }
 
-    setLoadedCustomerIds(new Set()); // Clear loaded customer IDs when channel changes
+    loadedCustomerIdsRef.current = new Set(); // Clear loaded customer IDs when channel changes
     setSelectedCustomerId(1); // Reset selected customer
 
     return () => {
@@ -755,16 +751,16 @@ const ChatInterface = () => {
       unsubscribeInbound?.();
     };
   }, [selectedChannel]);
-
   // Load outreach messages from Firebase when customer is selected
   useEffect(() => {
     const loadOutreachMessages = async () => {
       if (!USE_BROWSER_FIRESTORE_LISTENERS) {
-        setLoadedCustomerIds(prev => new Set(prev).add(selectedCustomerId));
+        // Just mark as loaded — no state update needed (using ref)
+        loadedCustomerIdsRef.current = new Set(loadedCustomerIdsRef.current).add(selectedCustomerId);
         return;
       }
       // Skip if already loaded for this customer to prevent duplicates
-      if (loadedCustomerIds.has(selectedCustomerId)) {
+      if (loadedCustomerIdsRef.current.has(selectedCustomerId)) {
         console.log(`[Chat] Already loaded messages for customer ${selectedCustomerId}, skipping...`);
         return;
       }
@@ -794,7 +790,7 @@ const ChatInterface = () => {
               id: msg.messageId || msg.id,
               sender: msg.status === 'received' ? "user" : "bot" as const,
               text: content,
-              time: msg.createdAt?.toDate?.() 
+              time: msg.createdAt?.toDate?.()
                 ? msg.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                 : formatTime(msg.timestamp) || 'Unknown time',
               timestampMs: msg.timestamp instanceof Date ? msg.timestamp.getTime() : undefined,
@@ -810,13 +806,13 @@ const ChatInterface = () => {
               : c
           ));
           
-          // Mark this customer as loaded
-          setLoadedCustomerIds(prev => new Set(prev).add(selectedCustomerId));
+          // Mark this customer as loaded (ref — no re-render)
+          loadedCustomerIdsRef.current = new Set(loadedCustomerIdsRef.current).add(selectedCustomerId);
           console.log(`[Chat] Loaded ${convertedMessages.length} total conversation messages from Firestore`);
         } else {
           console.log(`[Chat] No conversation messages found for ${currentCustomer.email}`);
-          // Mark as loaded even with no messages
-          setLoadedCustomerIds(prev => new Set(prev).add(selectedCustomerId));
+          // Mark as loaded even with no messages (ref — no re-render)
+          loadedCustomerIdsRef.current = new Set(loadedCustomerIdsRef.current).add(selectedCustomerId);
         }
       } catch (error) {
         console.error(`[Chat] Error loading conversation messages:`, error);
@@ -828,7 +824,8 @@ const ChatInterface = () => {
     if (currentCustomer?.email) {
       loadOutreachMessages();
     }
-  }, [selectedCustomerId, currentCustomer?.email, currentCustomer?.firebaseLeadId, selectedChannel, loadedCustomerIds]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedCustomerId, currentCustomer?.email, currentCustomer?.firebaseLeadId, selectedChannel]);
 
   useEffect(() => {
     setShowPlusMenu(false);

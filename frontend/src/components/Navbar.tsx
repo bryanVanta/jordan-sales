@@ -1,5 +1,5 @@
 "use client";
-import React, { useEffect, useState, Suspense } from 'react';
+import React, { useEffect, useRef, useState, Suspense } from 'react';
 import { useProfile } from '../app/context/ProfileContext';
 import { ChevronDown, ChevronRight, Plus, User } from 'lucide-react';
 import Link from 'next/link';
@@ -10,6 +10,7 @@ const PROJECT_CHANGED_EVENT = 'jordan:projectChanged';
 
 const NavbarContent = () => {
   const [showProfilePopup, setShowProfilePopup] = useState(false);
+  const profilePopupRef = useRef<HTMLDivElement>(null);
   const [projects, setProjects] = useState<Array<{ id: string; name: string }>>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
   const [projectsError, setProjectsError] = useState('');
@@ -134,6 +135,18 @@ const NavbarContent = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showProfilePopup]);
 
+  // Close profile popup when clicking outside
+  useEffect(() => {
+    if (!showProfilePopup) return;
+    const handleMouseDown = (e: MouseEvent) => {
+      if (profilePopupRef.current && !profilePopupRef.current.contains(e.target as Node)) {
+        setShowProfilePopup(false);
+      }
+    };
+    document.addEventListener('mousedown', handleMouseDown);
+    return () => document.removeEventListener('mousedown', handleMouseDown);
+  }, [showProfilePopup]);
+
   const handleSelectProject = (id: string) => {
     setShowProfilePopup(false);
     setSelectedProject(id);
@@ -198,10 +211,9 @@ const NavbarContent = () => {
         {/* Profile Pop-up Modal */}
         {showProfilePopup && (
           <>
-            {/* Click outside to close backdrop */}
-            <div className="fixed inset-0 z-[-1]" onClick={() => setShowProfilePopup(false)}></div>
+            {/* Click outside to close — handled by document mousedown listener */}
 
-            <div className="absolute top-16 right-0 w-[280px] bg-white rounded-[32px] shadow-[0_20px_60px_rgba(0,0,0,0.5)] border border-gray-100 p-6 z-[110] animate-in fade-in slide-in-from-top-4 duration-300">
+            <div ref={profilePopupRef} className="absolute top-16 right-0 w-[280px] bg-white rounded-[32px] shadow-[0_20px_60px_rgba(0,0,0,0.5)] border border-gray-100 p-6 z-[110] animate-in fade-in slide-in-from-top-4 duration-300">
               {/* Pop-up Header */}
               <div className="flex items-center gap-4 mb-6">
                 <div className="w-12 h-12 rounded-full bg-[#f2e1ff] flex items-center justify-center overflow-hidden shrink-0 border border-gray-100">

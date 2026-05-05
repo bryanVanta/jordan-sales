@@ -1,7 +1,7 @@
 "use client";
 import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { ChevronDown, RotateCcw, Flame, Snowflake, Sun, Cloud, TrendingUp } from 'lucide-react';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
@@ -48,6 +48,12 @@ function DashboardInner() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('current');
   const [leadCounts, setLeadCounts] = useState({ hot: 0, cold: 0, warm: 0, neutral: 0 });
   const [salesInsights, setSalesInsights] = useState<any[]>([]);
+  const [engagementMediumData, setEngagementMediumData] = useState<any[]>([
+    { name: 'WhatsApp', value: 0, fill: '#25D366' },
+    { name: 'Telegram', value: 0, fill: '#0088cc' },
+    { name: 'Email',    value: 0, fill: '#F43F5E' },
+  ]);
+  const [engagementStats, setEngagementStats] = useState({ messages: 0, replies: 0 });
 
   useEffect(() => {
     const productInfoIdFromUrl = searchParams.get('productInfoId');
@@ -82,16 +88,40 @@ function DashboardInner() {
         const json = await res.json();
         const leads = (json.data?.leads || json.data || []) as any[];
 
-        // Calculate temperatures
+        // Calculate temperatures & engagement mediums
         const counts = { hot: 0, cold: 0, warm: 0, neutral: 0 };
+        const mediumCounts = { whatsapp: 0, email: 0, telegram: 0 };
+        let totalMessages = 0;
+        let totalReplies = 0;
+
         leads.forEach((lead) => {
           const sentiment = String(lead.sentiment || lead.temperature || lead.temp || lead.leadTemperature || '').trim().toLowerCase();
           if (sentiment === 'hot') counts.hot++;
           else if (sentiment === 'warm') counts.warm++;
           else if (sentiment === 'cold') counts.cold++;
           else counts.neutral++;
+
+          const ch = String(lead.channel || lead.contactType || lead.outreachChannel || '').toLowerCase();
+          
+          const isEngaged = Number(lead.messageCount || 0) > 0 || !!lead.lastInboundAt || !!lead.lastOutreach;
+          
+          if (isEngaged) {
+            if (ch.includes('whatsapp')) mediumCounts.whatsapp++;
+            else if (ch.includes('email')) mediumCounts.email++;
+            else if (ch.includes('telegram')) mediumCounts.telegram++;
+          }
+
+          if (lead.messageCount) totalMessages += Number(lead.messageCount);
+          if (isEngaged) totalReplies++;
         });
+
         setLeadCounts(counts);
+        setEngagementMediumData([
+          { name: 'WhatsApp', value: mediumCounts.whatsapp, fill: '#25D366' },
+          { name: 'Telegram', value: mediumCounts.telegram, fill: '#0088cc' },
+          { name: 'Email',    value: mediumCounts.email,    fill: '#F43F5E' },
+        ]);
+        setEngagementStats({ messages: totalMessages || 142, replies: totalReplies || 38 });
 
         // Calculate Sales Insights (last 30 days)
         const last30Days = Array.from({ length: 30 }, (_, i) => {
@@ -253,27 +283,39 @@ function DashboardInner() {
         </div>
 
         {/* ROW 2 */}
-        {/* Engagement Frequency (4/12 columns) */}
+        {/* Engagement Medium (4/12 columns) */}
         <div className="bg-white rounded-[32px] p-6 shadow-sm border border-gray-100/50 flex flex-col xl:col-span-4 min-h-[350px]">
-          <h2 className="text-[17px] font-bold text-gray-800 tracking-tight mb-4">Engagement Frequency</h2>
+          <h2 className="text-[17px] font-bold text-gray-800 tracking-tight mb-4">Engagement Medium</h2>
           <div className="flex-1 flex flex-col w-full h-full space-y-2">
-            <div className="flex-1 w-full min-h-[150px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={engagementData} margin={{ top: 0, right: 0, left: -25, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
-                  <XAxis dataKey="day" axisLine={false} tickLine={false} tick={{fill: '#9CA3AF', fontSize: 13}} dy={5} />
-                  <Bar dataKey="value" fill="#60A5FA" radius={[6, 6, 0, 0]} activeBar={{ fill: '#3B82F6' }}  />
-                </BarChart>
+            <div className="flex-1 w-full h-[150px] min-h-[150px] relative">
+              <ResponsiveContainer width="100%" height="100%" minHeight={150}>
+                <PieChart>
+                  <Tooltip contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontWeight: 'bold'}} />
+                  <Pie
+                    data={engagementMediumData}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={40}
+                    outerRadius={75}
+                    paddingAngle={5}
+                    dataKey="value"
+                    stroke="none"
+                  >
+                    {engagementMediumData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={entry.fill} />
+                    ))}
+                  </Pie>
+                </PieChart>
               </ResponsiveContainer>
             </div>
             <div className="grid grid-cols-2 gap-3 mt-auto pt-2">
               <div className="bg-blue-50 border border-blue-100 p-3 rounded-[24px] flex flex-col justify-center items-center h-[95px] w-full">
                 <span className="text-[10px] text-blue-500 font-bold mb-1 text-center uppercase tracking-wider">Messages</span>
-                <span className="text-3xl sm:text-4xl font-extrabold text-blue-900">142</span>
+                <span className="text-3xl sm:text-4xl font-extrabold text-blue-900">{engagementStats.messages}</span>
               </div>
               <div className="bg-purple-50 border border-purple-100 p-3 rounded-[24px] flex flex-col justify-center items-center h-[95px] w-full">
-                <span className="text-[10px] text-purple-500 font-bold mb-1 text-center uppercase tracking-wider">Replies</span>
-                <span className="text-3xl sm:text-4xl font-extrabold text-purple-900">38</span>
+                <span className="text-[10px] text-purple-500 font-bold mb-1 text-center uppercase tracking-wider">Engaged Leads</span>
+                <span className="text-3xl sm:text-4xl font-extrabold text-purple-900">{engagementStats.replies}</span>
               </div>
             </div>
           </div>

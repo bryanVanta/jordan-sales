@@ -315,8 +315,13 @@ async function executeBulkOutreach(leadIds, productInfoId = 'current', options =
           });
         }
 
-        // Add small delay between sends to avoid rate limiting
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        // Add randomized delay (1-2 mins) between sends to avoid rate limiting & shadowbans
+        // Skip delay if this is the very last lead
+        if (leadId !== leadIds[leadIds.length - 1]) {
+          const delayMs = Math.floor(Math.random() * (120000 - 60000 + 1)) + 60000;
+          console.log(`[Outreach] Scheduling next message in ${Math.round(delayMs / 1000)} seconds...`);
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
       } catch (error) {
         console.error(`[Outreach] Error processing lead ${leadId}:`, error.message);
         results.failed++;

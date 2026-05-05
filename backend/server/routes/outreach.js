@@ -240,13 +240,14 @@ router.post('/send', async (req, res) => {
 
     console.log(`[API] Receiving outreach request for ${leadIds.length} leads`);
 
-    // Execute bulk outreach
-    const results = await executeBulkOutreach(leadIds, productInfoId, { channel });
+    // Execute bulk outreach in the background to prevent request timeout due to long delays
+    executeBulkOutreach(leadIds, productInfoId, { channel }).catch((err) => {
+      console.error('[API] Background outreach error:', err);
+    });
 
     res.json({
       success: true,
-      message: `Outreach completed: ${results.successful} sent, ${results.failed} failed`,
-      ...results,
+      message: `Outreach scheduled for ${leadIds.length} leads. Messages will be sent with 1-2 minute delays to prevent rate limits.`,
     });
   } catch (error) {
     console.error('[API] Outreach error:', error);

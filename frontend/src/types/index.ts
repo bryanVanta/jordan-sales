@@ -76,3 +76,17 @@ export interface AutomationTask {
   createdAt: Date;
   updatedAt: Date;
 }
+
+export interface UserProfile {
+  id: string;
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone?: string;
+  company?: string;
+  title?: string;
+  bio?: string;
+  avatar?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}

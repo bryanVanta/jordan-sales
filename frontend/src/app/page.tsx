@@ -150,12 +150,12 @@ function DashboardInner() {
               <div className="flex items-center gap-2 text-xs sm:text-sm font-medium text-gray-600"><span className="w-4 h-1 rounded-full bg-yellow-400"></span> Warm</div>
             </div>
           </div>
-          <div className="flex-1 w-full min-h-[300px]">
-            <ResponsiveContainer width="100%" height="100%">
+          <div className="flex-1 w-full h-[300px] min-h-[300px] relative">
+            <ResponsiveContainer width="100%" height="100%" minHeight={300}>
               <LineChart data={salesInsights} margin={{ top: 5, right: 10, left: -20, bottom: 25 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f0f0f0" />
                 <XAxis dataKey="name" axisLine={false} tickLine={false} tick={{fill: '#9CA3AF', fontSize: 13}} dy={15} />
-                <YAxis axisLine={false} tickLine={false} tick={{fill: '#9CA3AF', fontSize: 13}} dx={-10} />
+                <YAxis axisLine={false} tickLine={false} tick={{fill: '#9CA3AF', fontSize: 13}} dx={-10} allowDecimals={false} domain={[0, 'dataMax + 5']} />
                 <Tooltip cursor={{stroke: '#F3F4F6', strokeWidth: 2}} contentStyle={{borderRadius: '16px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)', fontWeight: 'bold'}} />
                 <Line type="monotone" dataKey="hot" stroke="#F87171" strokeWidth={3} dot={false} activeDot={{ r: 6 }} />
                 <Line type="monotone" dataKey="cold" stroke="#60A5FA" strokeWidth={3} dot={false} activeDot={{ r: 6 }} />

@@ -1,7 +1,7 @@
 "use client";
 import React, { Suspense, useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import ReactDOM from 'react-dom';
-import { Search, Filter, Play, Pause, Plus, FileUp, Edit3, Check, Minus, ChevronUp, ChevronDown, X, Mail, MessageCircle, Send, ChevronRight, Loader } from 'lucide-react';
+import { Search, Filter, Play, Pause, Plus, FileDown, Edit3, Check, Minus, ChevronUp, ChevronDown, X, Mail, MessageCircle, Send, ChevronRight, Loader } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
@@ -9,7 +9,7 @@ const API_BASE_URL = `${BACKEND_URL}/api`; // Fetching API base URL with /api en
 const SELECTED_PROJECT_STORAGE_KEY = 'jordan:selectedProjectId';
 const PROJECT_CHANGED_EVENT = 'jordan:projectChanged';
 
-function LeadsFooterPortal({ handleAdd, handleEdit, handleOutreach, selectedProjects, outreachLoading }: any) {
+function LeadsFooterPortal({ handleAdd, handleEdit, handleOutreach, handleExport, selectedProjects, outreachLoading }: any) {
   const [isMounted, setIsMounted] = useState(false);
 
   useEffect(() => {
@@ -28,8 +28,8 @@ function LeadsFooterPortal({ handleAdd, handleEdit, handleOutreach, selectedProj
           <button onClick={handleAdd} className="flex items-center gap-2 bg-gray-900 border border-white/10 text-white px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-bold shadow-2xl hover:bg-black transition-all transform hover:-translate-y-1">
             <div className="w-5 h-5 rounded-md bg-blue-500 flex items-center justify-center"><Plus size={14} strokeWidth={3} /></div> Add Projects
           </button>
-          <button className="flex items-center gap-2 bg-white border border-gray-100 px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all transform hover:-translate-y-1">
-            <FileUp size={16} className="text-blue-500" /> Import
+          <button onClick={handleExport} className="flex items-center gap-2 bg-white border border-gray-100 px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all transform hover:-translate-y-1">
+            <FileDown size={16} className="text-blue-500" /> Export PDF
           </button>
           <button disabled={selectedProjects.length === 0} onClick={handleEdit} className={`flex items-center gap-2 bg-white border border-gray-100 px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all transform hover:-translate-y-1 ${selectedProjects.length === 0 ? 'opacity-40 grayscale pointer-events-none' : ''}`}>
             <Edit3 size={16} className="text-purple-500" /> Edit List
@@ -77,6 +77,45 @@ function LeadsPageInner() {
   const [outreachLoading, setOutreachLoading] = useState(false);
   const [outreachResults, setOutreachResults] = useState<any>(null);
   const [outreachError, setOutreachError] = useState('');
+
+  const handleExportPDF = async () => {
+    const { default: jsPDF } = await import('jspdf');
+    const { default: autoTable } = await import('jspdf-autotable');
+
+    const doc = new jsPDF({ orientation: 'landscape' });
+
+    doc.setFontSize(18);
+    doc.setFont('helvetica', 'bold');
+    doc.text('Leads Report', 14, 18);
+    doc.setFontSize(10);
+    doc.setFont('helvetica', 'normal');
+    doc.setTextColor(120);
+    doc.text(`Generated: ${new Date().toLocaleDateString('en-MY', { day: '2-digit', month: 'short', year: 'numeric' })}  |  Total: ${filteredProjects.length} leads`, 14, 26);
+    doc.setTextColor(0);
+
+    autoTable(doc, {
+      startY: 32,
+      head: [['Company', 'Person', 'WhatsApp / Phone', 'Email', 'Location', 'Temperature', 'Channel', 'Intent']],
+      body: filteredProjects.map((p: any) => [
+        p.company || '-',
+        p.person || '-',
+        p.whatsapp || p.phone || '-',
+        p.email || '-',
+        p.location || '-',
+        p.temp || p.sentiment || p.leadTemperature || '-',
+        p.channel || '-',
+        p.intent || '-',
+      ]),
+      styles: { fontSize: 8, cellPadding: 3 },
+      headStyles: { fillColor: [30, 30, 30], textColor: 255, fontStyle: 'bold', fontSize: 8 },
+      alternateRowStyles: { fillColor: [248, 250, 255] },
+      columnStyles: { 0: { fontStyle: 'bold' } },
+    });
+
+    const date = new Date().toISOString().split('T')[0];
+    doc.save(`leads-export-${date}.pdf`);
+  };
+
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' } | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const [loading, setLoading] = useState(true);
@@ -749,6 +788,7 @@ function LeadsPageInner() {
         handleAdd={handleAdd}
         handleEdit={handleEdit}
         handleOutreach={handleOutreach}
+        handleExport={handleExportPDF}
         selectedProjects={selectedProjects}
         outreachLoading={outreachLoading}
       />

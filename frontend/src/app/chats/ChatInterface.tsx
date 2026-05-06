@@ -23,7 +23,7 @@ import {
   Bot,
   X
 } from "lucide-react";
-import { fetchCompleteConversationByLeadId, formatTime } from "@/services/outreach";
+import { fetchCompleteConversationByLeadId, formatTime, formatDate } from "@/services/outreach";
 import { db } from "@/lib/firebase";
 import { addDoc, collection, onSnapshot } from "firebase/firestore";
 
@@ -391,7 +391,7 @@ const ChatInterface = () => {
                 id: msg.messageId || msg.id || `${index}-${timestampMs}`,
                 sender: (msg.status === 'received' ? 'user' : 'bot') as 'user' | 'bot',
                 text: content,
-                time: date ? date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Unknown time',
+                time: date ? formatTime(date) : 'Unknown time',
                 timestampMs,
                 media: media.length ? media : undefined,
                 transcript: msg.transcript ?? null,
@@ -618,13 +618,12 @@ const ChatInterface = () => {
                       : `[${msg.messageSubject || 'Email'}]\n\n${String(msg.messageContent || '')}`;
                     const content =
                       isMediaPlaceholderText(contentRaw) && media.length ? '' : contentRaw;
+                    const date = timestamp instanceof Date ? timestamp : (sortTime ? new Date(sortTime) : null);
                     return {
                       id: msg.messageId || msg.id,
                       sender: (msg.status === 'received' ? 'user' : 'bot') as 'user' | 'bot',
                       text: content,
-                      time: msg.createdAt?.toLocaleTimeString?.([], { hour: '2-digit', minute: '2-digit' })
-                        ? msg.createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                        : formatTime(msg.timestamp) || 'Unknown time',
+                      time: date ? formatTime(date) : 'Unknown time',
                       timestampMs: sortTime,
                       media: media.length ? media : undefined,
                       transcript: msg.transcript ?? null,
@@ -797,14 +796,13 @@ const ChatInterface = () => {
             const content =
               isMediaPlaceholderText(contentRaw) && media.length ? '' : contentRaw;
 
+            const timestamp = msg.timestamp instanceof Date ? msg.timestamp : (msg.createdAt?.toDate?.() ? msg.createdAt.toDate() : null);
             return {
               id: msg.messageId || msg.id,
               sender: msg.status === 'received' ? "user" : "bot" as const,
               text: content,
-              time: msg.createdAt?.toDate?.()
-                ? msg.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                : formatTime(msg.timestamp) || 'Unknown time',
-              timestampMs: msg.timestamp instanceof Date ? msg.timestamp.getTime() : undefined,
+              time: timestamp ? formatTime(timestamp) : 'Unknown time',
+              timestampMs: msg.timestamp instanceof Date ? msg.timestamp.getTime() : (msg.createdAt?.toDate?.() ? msg.createdAt.toDate().getTime() : Date.now()),
               media: media.length ? media : undefined,
               transcript: msg.transcript ?? null,
             };
@@ -1126,92 +1124,108 @@ const ChatInterface = () => {
         </div>
 
         <div ref={messagesContainerRef} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-4 custom-scrollbar bg-gray-50/20">
-          {currentCustomer.messages.map((msg) => (
-            <div key={msg.id} className={`flex ${msg.sender === 'bot' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
-              <div className={`flex flex-col max-w-[75%] ${msg.sender === 'bot' ? 'items-end' : 'items-start'}`}>
-                <div className={`px-4 py-2.5 rounded-2xl text-[13px] font-bold leading-relaxed shadow-sm ${
-                  msg.sender === 'bot' ? "bg-blue-600 text-white rounded-tr-none" : "bg-white border border-gray-100 text-gray-800 rounded-tl-none"
-                }`}>
-                  {msg.media?.length ? (
-                    <div className="space-y-2">
-                      {msg.media.map((item, idx) => {
-                        const kind = String(item?.kind || '').toLowerCase();
-                        const url = String(item?.url || '').trim();
-                        const mimeType = String(item?.mimeType || '').trim().toLowerCase();
+          {currentCustomer.messages.map((msg, idx) => {
+            const prevMsg = idx > 0 ? currentCustomer.messages[idx - 1] : null;
+            const msgDate = msg.timestampMs ? new Date(msg.timestampMs).toDateString() : null;
+            const prevMsgDate = prevMsg?.timestampMs ? new Date(prevMsg.timestampMs).toDateString() : null;
+            const showDateDivider = msgDate && msgDate !== prevMsgDate;
 
-                        if (!url) {
-                          const label =
-                            kind === 'image'
-                              ? 'Image received'
-                              : kind === 'audio'
-                                ? 'Voice message received'
-                                : 'Attachment received';
-                          return (
-                            <div
-                              key={idx}
-                              className={`text-[12px] font-bold ${msg.sender === 'bot' ? 'text-white/90' : 'text-gray-700'}`}
-                            >
-                              {label}
-                              <span className={`${msg.sender === 'bot' ? 'text-white/70' : 'text-gray-500'} font-medium`}>
-                                {' '}
-                                (no URL from gateway)
-                              </span>
-                            </div>
-                          );
-                        }
-
-                        if (kind === 'image' || mimeType.startsWith('image/')) {
-                          return (
-                            <a key={idx} href={url} target="_blank" rel="noreferrer">
-                              <img
-                                src={url}
-                                alt={item?.caption || 'Image'}
-                                className={`max-w-[240px] sm:max-w-[320px] max-h-[360px] object-contain bg-black/5 rounded-xl border ${msg.sender === 'bot' ? 'border-white/20' : 'border-gray-200'} shadow-sm`}
-                                loading="lazy"
-                                onLoad={() => scrollToBottom("auto")}
-                              />
-                            </a>
-                          );
-                        }
-
-                        if (kind === 'audio' || mimeType.startsWith('audio/')) {
-                          return (
-                            <audio
-                              key={idx}
-                              controls
-                              preload="none"
-                              src={url}
-                              className={`w-[240px] sm:w-[320px] ${msg.sender === 'bot' ? 'invert hue-rotate-180' : ''}`}
-                            />
-                          );
-                        }
-
-                        return (
-                          <a
-                            key={idx}
-                            href={url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className={`text-[12px] underline ${msg.sender === 'bot' ? 'text-white/90' : 'text-blue-600'}`}
-                          >
-                            Attachment
-                          </a>
-                        );
-                      })}
+            return (
+              <React.Fragment key={msg.id}>
+                {showDateDivider && (
+                  <div className="flex justify-center my-6">
+                    <div className="bg-gray-200/50 backdrop-blur-sm text-gray-500 text-[10px] font-black px-4 py-1 rounded-full uppercase tracking-widest shadow-sm border border-white/50">
+                      {formatDate(new Date(msg.timestampMs!))}
                     </div>
-                  ) : null}
-                  {msg.text ? <div className={msg.media?.length ? 'mt-2' : ''}>{msg.text}</div> : null}
-                  {!msg.text && !mediaHasRenderableUrl(msg.media) && msg.media?.length ? (
-                    <div className="sr-only">{describeMedia(msg.media)}</div>
-                  ) : null}
+                  </div>
+                )}
+                <div className={`flex ${msg.sender === 'bot' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
+                  <div className={`flex flex-col max-w-[75%] ${msg.sender === 'bot' ? 'items-end' : 'items-start'}`}>
+                    <div className={`px-4 py-2.5 rounded-2xl text-[13px] font-bold leading-relaxed shadow-sm ${
+                      msg.sender === 'bot' ? "bg-blue-600 text-white rounded-tr-none" : "bg-white border border-gray-100 text-gray-800 rounded-tl-none"
+                    }`}>
+                      {msg.media?.length ? (
+                        <div className="space-y-2">
+                          {msg.media.map((item, idx) => {
+                            const kind = String(item?.kind || '').toLowerCase();
+                            const url = String(item?.url || '').trim();
+                            const mimeType = String(item?.mimeType || '').trim().toLowerCase();
+
+                            if (!url) {
+                              const label =
+                                kind === 'image'
+                                  ? 'Image received'
+                                  : kind === 'audio'
+                                    ? 'Voice message received'
+                                    : 'Attachment received';
+                              return (
+                                <div
+                                  key={idx}
+                                  className={`text-[12px] font-bold ${msg.sender === 'bot' ? 'text-white/90' : 'text-gray-700'}`}
+                                >
+                                  {label}
+                                  <span className={`${msg.sender === 'bot' ? 'text-white/70' : 'text-gray-500'} font-medium`}>
+                                    {' '}
+                                    (no URL from gateway)
+                                  </span>
+                                </div>
+                              );
+                            }
+
+                            if (kind === 'image' || mimeType.startsWith('image/')) {
+                              return (
+                                <a key={idx} href={url} target="_blank" rel="noreferrer">
+                                  <img
+                                    src={url}
+                                    alt={item?.caption || 'Image'}
+                                    className={`max-w-[240px] sm:max-w-[320px] max-h-[360px] object-contain bg-black/5 rounded-xl border ${msg.sender === 'bot' ? 'border-white/20' : 'border-gray-200'} shadow-sm`}
+                                    loading="lazy"
+                                    onLoad={() => scrollToBottom("auto")}
+                                  />
+                                </a>
+                              );
+                            }
+
+                            if (kind === 'audio' || mimeType.startsWith('audio/')) {
+                              return (
+                                <audio
+                                  key={idx}
+                                  controls
+                                  preload="none"
+                                  src={url}
+                                  className={`w-[240px] sm:w-[320px] ${msg.sender === 'bot' ? 'invert hue-rotate-180' : ''}`}
+                                />
+                              );
+                            }
+
+                            return (
+                              <a
+                                key={idx}
+                                href={url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className={`text-[12px] underline ${msg.sender === 'bot' ? 'text-white/90' : 'text-blue-600'}`}
+                              >
+                                Attachment
+                              </a>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+                      {msg.text ? <div className={msg.media?.length ? 'mt-2' : ''}>{msg.text}</div> : null}
+                      {!msg.text && !mediaHasRenderableUrl(msg.media) && msg.media?.length ? (
+                        <div className="sr-only">{describeMedia(msg.media)}</div>
+                      ) : null}
+                    </div>
+                    <div className="flex items-center gap-1 mt-1 opacity-50 px-1">
+                      <span className="text-[9px] font-bold text-gray-400">{msg.time}</span>
+                      {msg.sender === 'bot' && <CheckCheck size={10} className="text-blue-500" />}
+                    </div>
+                  </div>
                 </div>
-                <div className="flex items-center gap-1 mt-1 opacity-50 px-1">
-                  <span className="text-[9px] font-bold text-gray-400">{msg.time}</span>
-                  {msg.sender === 'bot' && <CheckCheck size={10} className="text-blue-500" />}
-                </div>
-              </div>
-            </div>
-          ))}
+              </React.Fragment>
+            );
+          })}
           {/* AI typing indicator — shown while auto-reply is being generated */}
           {false && currentCustomer?.aiTyping && (
             <div className="flex justify-end animate-in fade-in slide-in-from-bottom-2">

@@ -695,3 +695,29 @@ export const formatDate = (date: Date): string => {
   
   return date.toLocaleDateString();
 };
+
+/**
+ * Combined format for chat messages:
+ * - Today: "05:01 PM"
+ * - Yesterday: "Yesterday, 05:01 PM"
+ * - Older: "May 6, 05:01 PM"
+ */
+export const formatTimestampWithDate = (date: Date): string => {
+  if (!date) return '';
+  
+  const now = new Date();
+  const isToday = date.toDateString() === now.toDateString();
+  
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const isYesterday = date.toDateString() === yesterday.toDateString();
+  
+  const timeStr = date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  
+  if (isToday) return timeStr;
+  if (isYesterday) return `Yesterday, ${timeStr}`;
+  
+  // Older than yesterday: "May 6, 05:01 PM"
+  const dateStr = date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  return `${dateStr}, ${timeStr}`;
+};

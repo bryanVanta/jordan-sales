@@ -5,6 +5,7 @@
 
 const { db, admin } = require('../config/firebase');
 const { callLLM } = require('./llmService');
+const { recordLeadSentiment } = require('./leadHistoryService');
 
 // Configurable alert recipient — override with SALES_ALERT_WHATSAPP env var.
 const SALES_ALERT_NUMBER = (process.env.SALES_ALERT_WHATSAPP || process.env.SALES_ALERT_NUMBER || '+60142319219').trim();
@@ -342,6 +343,9 @@ const analyzeSingleLead = async (leadId) => {
       lastMessageTime: allMessages[allMessages.length - 1].createdAt || allMessages[allMessages.length - 1].timestamp,
       sentimentAnalysisMethod: 'ai',
     });
+
+    // Record sentiment history in PostgreSQL for accurate dashboard trends
+    await recordLeadSentiment(leadId, sentiment, leadData.productInfoId || leadData.product_info_id || 'current');
 
     console.log(`[Sentiment AI] Updated lead ${leadId}: ${sentiment} (${allMessages.length} messages)`);
 

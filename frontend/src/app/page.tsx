@@ -359,33 +359,54 @@ function DashboardInner() {
         );
 
         // Calculate Sales Insights (last 30 days)
-        const last30Days = Array.from({ length: 30 }, (_, i) => {
-          const d = new Date();
-          d.setDate(d.getDate() - (29 - i));
-          return toLocalDateKey(d);
-        });
-
-        // Initialize chart data
-        const chartData = last30Days.map(dateStr => {
-           const [, month, day] = dateStr.split('-');
-           return { name: `${day}/${month}`, dateStr, hot: 0, cold: 0, warm: 0 };
-        });
-
-        leads.forEach((lead) => {
-          const sentiment = normalizeSentiment(lead);
-          if (sentiment === 'neutral') return;
-
-          const leadDate = getTemperatureDate(lead);
-          if (!leadDate) return;
-
-          const activeFrom = toLocalDateKey(leadDate);
-          chartData.forEach((dataPoint) => {
-            if (dataPoint.dateStr < activeFrom) return;
-            dataPoint[sentiment]++;
+        // TRY NEW ACCURATE PG HISTORY FIRST
+        try {
+          const trendParams = new URLSearchParams({
+            days: '30',
+            productInfoId: projectId,
           });
-        });
+          const trendRes = await fetch(`${API_BASE_URL}/sentiment/historical-trends?${trendParams.toString()}`);
+          if (trendRes.ok) {
+            const trendJson = await trendRes.json();
+            if (trendJson.success && Array.isArray(trendJson.data) && trendJson.data.length > 0) {
+              setSalesInsights(trendJson.data);
+            } else {
+              throw new Error('No trend data in response');
+            }
+          } else {
+            throw new Error('API failed');
+          }
+        } catch (trendError) {
+          console.warn('[Dashboard] Falling back to local chart calculation:', trendError.message);
+          const last30Days = Array.from({ length: 30 }, (_, i) => {
+            const d = new Date();
+            d.setDate(d.getDate() - (29 - i));
+            return toLocalDateKey(d);
+          });
 
-        setSalesInsights(chartData);
+          const chartData = last30Days.map(dateStr => {
+            const [, month, day] = dateStr.split('-');
+            return { name: `${day}/${month}`, dateStr, hot: 0, cold: 0, warm: 0 };
+          });
+
+          leads.forEach((lead) => {
+            const sentiment = normalizeSentiment(lead);
+            if (sentiment === 'neutral') return;
+
+            // FALLBACK: Use sentimentLastUpdated to avoid projecting into the far past inaccurately.
+            // Note: This still has the "disappearing" problem if leads are updated, which is 
+            // why we prefer the PostgreSQL history API above.
+            const startDate = toDate(lead.sentimentLastUpdated) || toDate(lead.lastWarmHotAlertSentAt) || toDate(lead.updatedAt) || toDate(lead.createdAt);
+            if (!startDate) return;
+
+            const activeFrom = toLocalDateKey(startDate);
+            chartData.forEach((dataPoint) => {
+              if (dataPoint.dateStr < activeFrom) return;
+              dataPoint[sentiment]++;
+            });
+          });
+          setSalesInsights(chartData);
+        }
         setNewsInsight((prev) => ({ ...prev, status: 'loading', industry: topSegment.industry, country: topSegment.country }));
         try {
           const newsParams = new URLSearchParams({

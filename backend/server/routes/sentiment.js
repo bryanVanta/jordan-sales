@@ -12,6 +12,7 @@ const {
   getSentimentDistribution,
   getSentimentTrends,
 } = require('../services/sentimentService');
+const { getSentimentTrends: getHistoricalTrends } = require('../services/leadHistoryService');
 const { analyzeRevenueOpportunities } = require('../services/revenueOpportunityService');
 
 /**
@@ -126,6 +127,37 @@ router.get('/trends', async (req, res) => {
     });
   } catch (error) {
     console.error('[Sentiment API] Error in trends:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * GET /api/sentiment/historical-trends?days=30&productInfoId=current
+ * Get accurate sentiment trends from PostgreSQL history
+ * Query: days (default: 30), productInfoId (default: current)
+ */
+router.get('/historical-trends', async (req, res) => {
+  try {
+    const days = parseInt(req.query.days) || 30;
+    const productInfoId = req.query.productInfoId || 'current';
+    console.log(`[Sentiment API] Fetching historical trends for ${days} days, project: ${productInfoId}`);
+    
+    const trends = await getHistoricalTrends(productInfoId, days);
+
+    if (trends === null) {
+      return res.status(503).json({ 
+        error: 'PostgreSQL history tracking is not enabled or configured.',
+        fallback: true
+      });
+    }
+
+    res.json({
+      success: true,
+      data: trends,
+      timestamp: new Date(),
+    });
+  } catch (error) {
+    console.error('[Sentiment API] Error in historical-trends:', error);
     res.status(500).json({ error: error.message });
   }
 });

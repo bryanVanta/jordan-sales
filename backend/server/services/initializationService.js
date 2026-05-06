@@ -5,6 +5,7 @@
  */
 
 const { getProductInfo, CURRENT_DOC_ID } = require('./productInfoService');
+const { initializeDatabase } = require('../db/postgres/init');
 
 let productInfoCache = null;
 let isInitialized = false;
@@ -26,6 +27,9 @@ async function initializeSystem() {
 
   initializationPromise = (async () => {
     try {
+      // Initialize PostgreSQL if enabled
+      await initializeDatabase();
+
       console.log('📚 Loading product & services information from Firebase...');
       productInfoCache = await getProductInfo(CURRENT_DOC_ID);
 

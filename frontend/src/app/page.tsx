@@ -122,16 +122,19 @@ const getTopEngagedSegment = (leads: any[]): { industry: string; country: string
     .sort((a, b) => b.activityMs - a.activityMs)
     .slice(0, 25);
 
-  const counts = new Map<string, { count: number; industry: string; country: string }>();
+  const industryCounts = new Map<string, number>();
+  const countryCounts = new Map<string, number>();
   engaged.forEach(({ lead }) => {
     const industry = inferLeadIndustry(lead);
     const country = inferLeadCountry(lead);
-    const key = `${industry}::${country.toLowerCase()}`;
-    const current = counts.get(key) || { count: 0, industry, country };
-    counts.set(key, { ...current, count: current.count + 1 });
+    industryCounts.set(industry, (industryCounts.get(industry) || 0) + 1);
+    countryCounts.set(country, (countryCounts.get(country) || 0) + 1);
   });
 
-  return [...counts.values()].sort((a, b) => b.count - a.count)[0] || { industry: 'business', country: 'Malaysia' };
+  const industry = [...industryCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || 'business';
+  const country = [...countryCounts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || 'Malaysia';
+
+  return { industry, country };
 };
 
 interface NewsInsight {
@@ -231,6 +234,7 @@ function DashboardInner() {
   const searchParams = useSearchParams();
   const [selectedProjectId, setSelectedProjectId] = useState<string>('current');
   const [leadCounts, setLeadCounts] = useState({ hot: 0, cold: 0, warm: 0, neutral: 0 });
+  const [growthCounts, setGrowthCounts] = useState({ hot: 0, cold: 0, warm: 0, neutral: 0 });
   const [salesInsights, setSalesInsights] = useState<any[]>([]);
   const [revenueList, setRevenueList] = useState<RevenueCategory[]>(emptyRevenueList);
   const [engagementMediumData, setEngagementMediumData] = useState<any[]>([
@@ -285,6 +289,14 @@ function DashboardInner() {
 
         // Calculate temperatures & engagement mediums
         const counts = { hot: 0, cold: 0, warm: 0, neutral: 0 };
+        const gCounts = { hot: 0, cold: 0, warm: 0, neutral: 0 };
+
+        const thresholdDate = new Date();
+        thresholdDate.setHours(0, 0, 0, 0);
+        if (dateFilter === 'Yesterday') thresholdDate.setDate(thresholdDate.getDate() - 1);
+        else if (dateFilter === '3 days ago') thresholdDate.setDate(thresholdDate.getDate() - 3);
+        else if (dateFilter === '7 days ago') thresholdDate.setDate(thresholdDate.getDate() - 7);
+        const thresholdStr = toLocalDateKey(thresholdDate);
         const mediumCounts = { whatsapp: 0, email: 0, telegram: 0 };
         const opportunities = Object.fromEntries(
           Object.entries(REVENUE_CONFIG).map(([key, config]) => [key, { ...config, count: 0, contacts: [] as any[] }])
@@ -294,6 +306,12 @@ function DashboardInner() {
 
         leads.forEach((lead) => {
           const sentiment = normalizeSentiment(lead);
+
+          const leadDate = getTemperatureDate(lead);
+          if (leadDate && toLocalDateKey(leadDate) >= thresholdStr) {
+            gCounts[sentiment]++;
+          }
+
           if (sentiment === 'hot') counts.hot++;
           else if (sentiment === 'warm') counts.warm++;
           else if (sentiment === 'cold') counts.cold++;
@@ -326,6 +344,7 @@ function DashboardInner() {
         });
 
         setLeadCounts(counts);
+        setGrowthCounts(gCounts);
         setEngagementMediumData([
           { name: 'WhatsApp', value: mediumCounts.whatsapp, fill: '#25D366' },
           { name: 'Telegram', value: mediumCounts.telegram, fill: '#0088cc' },
@@ -423,7 +442,7 @@ function DashboardInner() {
     };
 
     fetchLeads();
-  }, [selectedProjectId]);
+  }, [selectedProjectId, dateFilter]);
 
   const openChatForContact = (contact: any) => {
     const leadId = String(contact.leadId || '').trim();
@@ -501,7 +520,7 @@ function DashboardInner() {
                 <div className="flex items-center gap-3 mb-2 z-10">
                   <span className="text-orange-900 font-bold text-sm sm:text-base">Hot</span>
                   <div className="bg-white/60 text-orange-700 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold flex items-center gap-0.5 shadow-sm border border-orange-100/50">
-                     <TrendingUp size={12} strokeWidth={3} /> +12
+                     <TrendingUp size={12} strokeWidth={3} /> +{growthCounts.hot}
                   </div>
                 </div>
                 <div className="flex items-end gap-2 text-orange-600 z-10">
@@ -515,7 +534,7 @@ function DashboardInner() {
                 <div className="flex items-center gap-2 mb-2 z-10">
                   <span className="text-blue-900 font-bold text-sm sm:text-base">Cold</span>
                   <div className="bg-white/60 text-blue-700 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold flex items-center gap-0.5 shadow-sm border border-blue-100/50">
-                     <TrendingUp size={12} strokeWidth={3} /> +3
+                     <TrendingUp size={12} strokeWidth={3} /> +{growthCounts.cold}
                   </div>
                 </div>
                 <div className="flex items-end gap-2 text-blue-600 z-10">
@@ -529,7 +548,7 @@ function DashboardInner() {
                 <div className="flex items-center gap-3 mb-2 z-10">
                   <span className="text-yellow-900 font-bold text-sm sm:text-base">Warm</span>
                   <div className="bg-white/60 text-yellow-700 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold flex items-center gap-0.5 shadow-sm border border-yellow-100/50">
-                     <TrendingUp size={12} strokeWidth={3} /> +8
+                     <TrendingUp size={12} strokeWidth={3} /> +{growthCounts.warm}
                   </div>
                 </div>
                 <div className="flex items-end gap-2 text-yellow-600 z-10">
@@ -543,7 +562,7 @@ function DashboardInner() {
                 <div className="flex items-center gap-3 mb-2 z-10">
                   <span className="text-gray-900 font-bold text-sm sm:text-base">Neutral</span>
                   <div className="bg-white/60 text-gray-700 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold flex items-center gap-0.5 shadow-sm border border-gray-200/50">
-                     <TrendingUp size={11} strokeWidth={3} /> +1
+                     <TrendingUp size={11} strokeWidth={3} /> +{growthCounts.neutral}
                   </div>
                 </div>
                 <div className="flex items-end gap-2 text-gray-600 z-10">

@@ -9,6 +9,44 @@ const API_BASE_URL = `${BACKEND_URL}/api`;
 const SELECTED_PROJECT_STORAGE_KEY = 'jordan:selectedProjectId';
 const PROJECT_CHANGED_EVENT = 'jordan:projectChanged';
 
+const toDate = (value: any): Date | null => {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (typeof value.toDate === 'function') {
+    const date = value.toDate();
+    return date instanceof Date && !Number.isNaN(date.getTime()) ? date : null;
+  }
+
+  const seconds = value._seconds ?? value.seconds;
+  if (typeof seconds === 'number') {
+    const millis = seconds * 1000 + Math.floor((value._nanoseconds ?? value.nanoseconds ?? 0) / 1_000_000);
+    const date = new Date(millis);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const toLocalDateKey = (date: Date): string => {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+};
+
+const normalizeSentiment = (lead: any): 'hot' | 'warm' | 'cold' | 'neutral' => {
+  const value = String(lead.sentiment || lead.temperature || lead.temp || lead.leadTemperature || '').trim().toLowerCase();
+  if (value === 'hot' || value === 'warm' || value === 'cold') return value;
+  return 'neutral';
+};
+
+const getTemperatureDate = (lead: any): Date | null =>
+  toDate(lead.sentimentLastUpdated) ||
+  toDate(lead.lastWarmHotAlertSentAt) ||
+  toDate(lead.updatedAt) ||
+  toDate(lead.createdAt);
+
 const engagementData = [
   { day: 'M', value: 20 }, { day: 'T', value: 40 }, { day: 'W', value: 30 }, 
   { day: 'T', value: 50 }, { day: 'F', value: 45 }, { day: 'S', value: 15 }, { day: 'S', value: 10 }
@@ -95,7 +133,7 @@ function DashboardInner() {
         let totalReplies = 0;
 
         leads.forEach((lead) => {
-          const sentiment = String(lead.sentiment || lead.temperature || lead.temp || lead.leadTemperature || '').trim().toLowerCase();
+          const sentiment = normalizeSentiment(lead);
           if (sentiment === 'hot') counts.hot++;
           else if (sentiment === 'warm') counts.warm++;
           else if (sentiment === 'cold') counts.cold++;
@@ -127,7 +165,7 @@ function DashboardInner() {
         const last30Days = Array.from({ length: 30 }, (_, i) => {
           const d = new Date();
           d.setDate(d.getDate() - (29 - i));
-          return d.toISOString().split('T')[0]; // YYYY-MM-DD
+          return toLocalDateKey(d);
         });
 
         // Initialize chart data
@@ -137,21 +175,17 @@ function DashboardInner() {
         });
 
         leads.forEach((lead) => {
-           // Parse Firestore timestamp or Date string
-           let leadDate = new Date();
-           if (lead.createdAt) {
-             if (lead.createdAt._seconds) leadDate = new Date(lead.createdAt._seconds * 1000);
-             else leadDate = new Date(lead.createdAt);
-           }
-           const dateStr = leadDate.toISOString().split('T')[0];
-           
-           const dataPoint = chartData.find(d => d.dateStr === dateStr);
-           if (dataPoint) {
-              const sentiment = String(lead.sentiment || lead.temperature || lead.temp || lead.leadTemperature || '').trim().toLowerCase();
-              if (sentiment === 'hot') dataPoint.hot++;
-              else if (sentiment === 'warm') dataPoint.warm++;
-              else if (sentiment === 'cold') dataPoint.cold++;
-           }
+          const sentiment = normalizeSentiment(lead);
+          if (sentiment === 'neutral') return;
+
+          const leadDate = getTemperatureDate(lead);
+          if (!leadDate) return;
+
+          const activeFrom = toLocalDateKey(leadDate);
+          chartData.forEach((dataPoint) => {
+            if (dataPoint.dateStr < activeFrom) return;
+            dataPoint[sentiment]++;
+          });
         });
 
         setSalesInsights(chartData);

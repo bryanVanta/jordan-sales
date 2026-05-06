@@ -8,6 +8,18 @@ const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:500
 const API_BASE_URL = `${BACKEND_URL}/api`; // Fetching API base URL with /api endpoint from environment variables
 const SELECTED_PROJECT_STORAGE_KEY = 'jordan:selectedProjectId';
 const PROJECT_CHANGED_EVENT = 'jordan:projectChanged';
+const EMPTY_LEAD_FORM = {
+  company: '',
+  person: '',
+  email: '',
+  phone: '',
+  whatsapp: '',
+  location: '',
+  temp: 'Neutral',
+  intent: '',
+  next: 'Follow Up',
+  channel: 'Email',
+};
 
 function LeadsFooterPortal({ handleAdd, handleEdit, handleOutreach, handleExport, selectedProjects, outreachLoading }: any) {
   const [isMounted, setIsMounted] = useState(false);
@@ -132,9 +144,8 @@ function LeadsPageInner() {
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add');
-  const [formData, setFormData] = useState({
-    company: '', person: '', email: '', phone: '', whatsapp: '', location: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email'
-  });
+  const [formData, setFormData] = useState(EMPTY_LEAD_FORM);
+  const [savingLead, setSavingLead] = useState(false);
 
   const stopProgressTracking = () => {
     if (progressIntervalRef.current) {
@@ -405,36 +416,67 @@ function LeadsPageInner() {
 
   const handleAdd = () => {
     setModalMode('add');
-    setFormData({ company: '', person: '', email: '', phone: '', whatsapp: '', location: '', temp: 'Neutral', intent: '', next: 'Follow Up', channel: 'Email' });
+    setFormData(EMPTY_LEAD_FORM);
+    setError('');
     setIsModalOpen(true);
   };
 
   const handleEdit = () => {
     if (selectedProjects.length === 0) return;
-    const project = projects.find(l => l.id === selectedProjects[0]);
-    if (project) {
-      setFormData({ 
-        company: project.company, person: project.person, email: project.email, phone: project.phone, whatsapp: project.whatsapp, location: project.location,
-        temp: project.temp, intent: project.intent, next: project.next, channel: project.channel 
+    setError('');
+    setModalMode('edit');
+
+    if (selectedProjects.length > 1) {
+      const selectedRows = projects.filter((project) => selectedProjects.includes(project.id));
+      const commonValue = (key: keyof typeof EMPTY_LEAD_FORM, fallback = '') => {
+        if (selectedRows.length === 0) return fallback;
+        const firstValue = String((selectedRows[0] as any)[key] || fallback);
+        return selectedRows.every((row) => String((row as any)[key] || fallback) === firstValue) ? firstValue : fallback;
+      };
+
+      setFormData({
+        ...EMPTY_LEAD_FORM,
+        location: commonValue('location'),
+        intent: commonValue('intent'),
+        next: commonValue('next'),
+        channel: commonValue('channel'),
       });
-      setModalMode('edit');
       setIsModalOpen(true);
+      return;
     }
+
+    const project = projects.find((lead) => lead.id === selectedProjects[0]);
+    if (!project) return;
+
+    setFormData({
+      company: project.company || '',
+      person: project.person || '',
+      email: project.email || '',
+      phone: project.phone || '',
+      whatsapp: project.whatsapp || '',
+      location: project.location || '',
+      temp: project.temp || 'Neutral',
+      intent: project.intent || '',
+      next: project.next || 'Follow Up',
+      channel: project.channel || 'Email',
+    });
+    setIsModalOpen(true);
   };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
     const saveLead = async () => {
-      const payload = {
+      setSavingLead(true);
+      const isBulkEdit = modalMode === 'edit' && selectedProjects.length > 1;
+      const payload: Record<string, string> = isBulkEdit ? {} : {
         company: formData.company,
         companyName: formData.company,
         person: formData.person,
         email: formData.email,
+        phone: formData.phone,
+        whatsapp: formData.whatsapp,
         location: formData.location,
-        temp: formData.temp,
-        leadTemperature: formData.temp,
-        status: 'new',
         productInfoId: selectedProjectId,
         intent: formData.intent,
         next: formData.next,
@@ -442,24 +484,50 @@ function LeadsPageInner() {
         channel: formData.channel,
       };
 
-      const endpoint = modalMode === 'add'
-        ? `${API_BASE_URL}/leads`
-        : `${API_BASE_URL}/leads/${selectedProjects[0]}`;
-      const method = modalMode === 'add' ? 'POST' : 'PUT';
+      if (isBulkEdit) {
+        if (formData.next) {
+          payload.next = formData.next;
+          payload.nextAction = formData.next;
+        }
+        if (formData.channel) payload.channel = formData.channel;
+        if (formData.location.trim()) payload.location = formData.location;
+        if (formData.intent.trim()) payload.intent = formData.intent;
+        if (Object.keys(payload).length === 0) {
+          throw new Error('Choose at least one field to update.');
+        }
+      }
+      if (modalMode === 'add') {
+        payload.temp = formData.temp;
+        payload.leadTemperature = formData.temp;
+      }
 
-      await fetch(endpoint, {
-        method,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
+      const leadIds = modalMode === 'add' ? [''] : selectedProjects;
+      await Promise.all(leadIds.map(async (leadId) => {
+        const endpoint = modalMode === 'add'
+          ? `${API_BASE_URL}/leads`
+          : `${API_BASE_URL}/leads/${leadId}`;
+        const response = await fetch(endpoint, {
+          method: modalMode === 'add' ? 'POST' : 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+
+        if (!response.ok) {
+          const result = await response.json().catch(() => null);
+          throw new Error(result?.error || 'Could not save the lead.');
+        }
+      }));
 
       setIsModalOpen(false);
+      setSelectedProjects([]);
       await loadLeads();
     };
 
     saveLead().catch((submitError) => {
       console.error(submitError);
-      setError('Could not save the lead.');
+      setError(submitError instanceof Error ? submitError.message : 'Could not save the lead.');
+    }).finally(() => {
+      setSavingLead(false);
     });
   };
 
@@ -523,6 +591,8 @@ function LeadsPageInner() {
       default: return null;
     }
   };
+
+  const isBulkEdit = modalMode === 'edit' && selectedProjects.length > 1;
 
   return (
     <div className="flex flex-col h-full px-4 sm:px-10 pt-2 relative overflow-hidden">
@@ -799,24 +869,33 @@ function LeadsPageInner() {
           <div className="bg-white rounded-[32px] w-full max-w-lg p-8 shadow-2xl animate-in zoom-in-95 duration-200">
              <div className="flex justify-between items-center mb-6 text-left">
                 <div>
-                  <h2 className="text-2xl font-black text-gray-900 tracking-tight">{modalMode === 'add' ? 'New Project' : 'Edit Project'}</h2>
-                  <p className="text-gray-400 font-bold text-[11px] uppercase tracking-widest mt-1">Global Project Hub</p>
+                  <h2 className="text-2xl font-black text-gray-900 tracking-tight">
+                    {modalMode === 'add' ? 'New Lead' : isBulkEdit ? `Edit ${selectedProjects.length} Leads` : 'Edit Lead'}
+                  </h2>
+                  <p className="text-gray-400 font-bold text-[11px] uppercase tracking-widest mt-1">Lead Database</p>
                 </div>
-                <button onClick={() => setIsModalOpen(false)} className="w-10 h-10 flex items-center justify-center bg-gray-50 rounded-xl text-gray-400 hover:text-gray-900 transition-all"><X size={20} /></button>
+                <button disabled={savingLead} onClick={() => setIsModalOpen(false)} className="w-10 h-10 flex items-center justify-center bg-gray-50 rounded-xl text-gray-400 hover:text-gray-900 transition-all disabled:opacity-40"><X size={20} /></button>
              </div>
+             {error && (
+               <div className="mb-4 rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-[12px] font-bold text-red-600">
+                 {error}
+               </div>
+             )}
              <form onSubmit={handleSubmit} className="space-y-4 text-left">
-                <div className="grid grid-cols-2 gap-4">
-                   <div className="space-y-1.5 flex flex-col items-start text-left">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Company</label>
+                {!isBulkEdit && (
+                  <>
+                 <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-1.5 flex flex-col items-start text-left">
+                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Company</label>
                     <input required value={formData.company} onChange={e => setFormData({...formData, company: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" />
                    </div>
                    <div className="space-y-1.5 flex flex-col items-start text-left">
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Person</label>
-                    <input required value={formData.person} onChange={e => setFormData({...formData, person: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" />
-                   </div>
-                </div>
-                <div className="space-y-1.5 flex flex-col items-start text-left">
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Business Email</label>
+                     <input required value={formData.person} onChange={e => setFormData({...formData, person: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" />
+                    </div>
+                 </div>
+                 <div className="space-y-1.5 flex flex-col items-start text-left">
+                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Business Email</label>
                   <input required type="email" value={formData.email} onChange={e => setFormData({...formData, email: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" />
                 </div>
                 <div className="grid grid-cols-2 gap-4">
@@ -826,32 +905,46 @@ function LeadsPageInner() {
                    </div>
                    <div className="space-y-1.5 flex flex-col items-start text-left">
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">WhatsApp Number</label>
-                    <input type="tel" value={formData.whatsapp} onChange={e => setFormData({...formData, whatsapp: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" placeholder="+60123456789" />
-                   </div>
-                </div>
+                     <input type="tel" value={formData.whatsapp} onChange={e => setFormData({...formData, whatsapp: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" placeholder="+60123456789" />
+                    </div>
+                 </div>
+                  </>
+                )}
                 <div className="space-y-1.5 flex flex-col items-start text-left">
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Location</label>
                   <input value={formData.location} onChange={e => setFormData({...formData, location: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className={modalMode === 'add' ? 'grid grid-cols-2 gap-4' : 'space-y-4'}>
+                   {modalMode === 'add' && (
+                     <div className="space-y-1.5 flex flex-col items-start text-left">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Temperature</label>
+                      <select value={formData.temp} onChange={e => setFormData({...formData, temp: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold outline-none">
+                        {['Hot', 'Warm', 'Cold', 'Neutral'].map(v => <option key={v} value={v}>{v}</option>)}
+                      </select>
+                     </div>
+                   )}
                    <div className="space-y-1.5 flex flex-col items-start text-left">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Temperature</label>
-                    <select value={formData.temp} onChange={e => setFormData({...formData, temp: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold outline-none">{['Hot', 'Warm', 'Cold', 'Neutral'].map(v => <option key={v} value={v}>{v}</option>)}</select>
-                   </div>
-                   <div className="space-y-1.5 flex flex-col items-start text-left">
-                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Channel</label>
-                    <select value={formData.channel} onChange={e => setFormData({...formData, channel: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold outline-none">{['Email', 'Whatsapp', 'Telegram'].map(v => <option key={v} value={v}>{v}</option>)}</select>
+                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Channel</label>
+                    <select value={formData.channel} onChange={e => setFormData({...formData, channel: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold outline-none">
+                      {isBulkEdit && <option value="">Keep Existing</option>}
+                      {['Email', 'Whatsapp', 'Telegram'].map(v => <option key={v} value={v}>{v}</option>)}
+                    </select>
                    </div>
                 </div>
                 <div className="space-y-1.5 flex flex-col items-start text-left">
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Next Action</label>
-                  <select value={formData.next} onChange={e => setFormData({...formData, next: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold outline-none">{['Follow Up', 'Send Promo', 'Close Deal', 'Escalate'].map(v => <option key={v} value={v}>{v}</option>)}</select>
+                  <select value={formData.next} onChange={e => setFormData({...formData, next: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold outline-none">
+                    {isBulkEdit && <option value="">Keep Existing</option>}
+                    {['Follow Up', 'Send Promo', 'Close Deal', 'Escalate'].map(v => <option key={v} value={v}>{v}</option>)}
+                  </select>
                 </div>
                 <div className="space-y-1.5 flex flex-col items-start text-left">
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Intent / Context</label>
                   <textarea value={formData.intent} onChange={e => setFormData({...formData, intent: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold h-20 resize-none outline-none focus:ring-2 focus:ring-blue-100 transition-all" />
                 </div>
-                <button type="submit" className="w-full bg-blue-600 text-white py-4 rounded-xl font-black tracking-widest text-[12px] hover:bg-blue-700 shadow-lg mt-4 transition-all uppercase">{modalMode === 'add' ? 'Confirm Addition' : 'Update Project'}</button>
+                <button disabled={savingLead} type="submit" className="w-full bg-blue-600 text-white py-4 rounded-xl font-black tracking-widest text-[12px] hover:bg-blue-700 shadow-lg mt-4 transition-all uppercase disabled:opacity-60 disabled:cursor-not-allowed">
+                  {savingLead ? 'Saving...' : modalMode === 'add' ? 'Confirm Addition' : isBulkEdit ? `Update ${selectedProjects.length} Leads` : 'Update Lead'}
+                </button>
              </form>
           </div>
         </div>

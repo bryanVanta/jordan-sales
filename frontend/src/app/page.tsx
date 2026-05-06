@@ -1,6 +1,6 @@
 "use client";
-import React, { useState, useMemo, useEffect } from 'react';
-import { useSearchParams } from 'next/navigation';
+import React, { useState, useEffect } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { ChevronDown, RotateCcw, Flame, Snowflake, Sun, Cloud, TrendingUp } from 'lucide-react';
 
@@ -70,14 +70,63 @@ interface RevenueCategory {
   contacts: any[];
 }
 
-const REVENUE_DATA: Record<string, RevenueCategory> = {
-  price: { id: 'price', title: 'Price Sensitive', emoji: '💰', color: 'bg-orange-50', text: 'text-orange-800', border: 'border-orange-200', count: 18, contacts: generateContacts(18) },
-  considering: { id: 'considering', title: 'Considering', emoji: '🤔', color: 'bg-yellow-50', text: 'text-yellow-800', border: 'border-yellow-200', count: 24, contacts: generateContacts(24) },
-  objection: { id: 'objection', title: 'Objection', emoji: '⚠️', color: 'bg-gray-50', text: 'text-gray-800', border: 'border-gray-200', count: 8, contacts: generateContacts(8) },
-  ready: { id: 'ready', title: 'Ready To Buy', emoji: '🔥', color: 'bg-red-50', text: 'text-red-800', border: 'border-red-200', count: 12, contacts: generateContacts(12) }
+const REVENUE_CONFIG: Record<string, Omit<RevenueCategory, 'count' | 'contacts'>> = {
+  price: { id: 'price', title: 'Price Sensitive', emoji: '$', color: 'bg-orange-50', text: 'text-orange-800', border: 'border-orange-200' },
+  considering: { id: 'considering', title: 'Considering', emoji: '?', color: 'bg-yellow-50', text: 'text-yellow-800', border: 'border-yellow-200' },
+  objection: { id: 'objection', title: 'Objection', emoji: '!', color: 'bg-gray-50', text: 'text-gray-800', border: 'border-gray-200' },
+  ready: { id: 'ready', title: 'Ready To Buy', emoji: 'HOT', color: 'bg-red-50', text: 'text-red-800', border: 'border-red-200' }
+};
+
+const REVENUE_DESCRIPTIONS: Record<string, string> = {
+  price: 'Asked about pricing, quotes, budget, or discounts',
+  considering: 'Engaged and evaluating, but no clear buying signal yet',
+  objection: 'Raised concerns, blockers, timing issues, or pushback',
+  ready: 'Shows buying intent or asked for the next step',
+};
+
+const emptyRevenueList = (): RevenueCategory[] =>
+  Object.values(REVENUE_CONFIG).map((item) => ({ ...item, count: 0, contacts: [] }));
+
+const getLeadChannel = (lead: any): 'WhatsApp' | 'Email' | 'Telegram' => {
+  const value = String(lead.channel || lead.contactType || lead.outreachChannel || lead.lastInboundChannel || '').toLowerCase();
+  if (value.includes('whatsapp')) return 'WhatsApp';
+  if (value.includes('telegram')) return 'Telegram';
+  return 'Email';
+};
+
+const formatRelativeDate = (date: Date | null): string => {
+  if (!date) return 'No activity';
+  const today = new Date();
+  const yesterday = new Date();
+  yesterday.setDate(today.getDate() - 1);
+  if (toLocalDateKey(date) === toLocalDateKey(today)) return 'Today';
+  if (toLocalDateKey(date) === toLocalDateKey(yesterday)) return 'Yesterday';
+  return date.toLocaleDateString('en-MY', { day: '2-digit', month: 'short' });
+};
+
+const classifyRevenueOpportunity = (lead: any): keyof typeof REVENUE_CONFIG => {
+  const saved = String(lead.revenueOpportunity || '').trim().toLowerCase();
+  if (saved in REVENUE_CONFIG) return saved as keyof typeof REVENUE_CONFIG;
+
+  const sentiment = normalizeSentiment(lead);
+  const text = [
+    lead.intent,
+    lead.next,
+    lead.lastMessage,
+    lead.messagePreview,
+    lead.summary,
+    lead.notes,
+    lead.objection,
+  ].map((value) => String(value || '').toLowerCase()).join(' ');
+
+  if (/\b(price|pricing|cost|budget|expensive|cheap|discount|quote|quotation|fee|fees|rate|rates)\b/.test(text)) return 'price';
+  if (/\b(not interested|no need|too busy|already have|concern|issue|problem|however|can't|cannot)\b/.test(text)) return 'objection';
+  if (/\b(ready|buy|purchase|proceed|start|book|demo|invoice|send it|sign|deal)\b/.test(text) || sentiment === 'hot') return 'ready';
+  return 'considering';
 };
 
 function DashboardInner() {
+  const router = useRouter();
   const [dateFilter, setDateFilter] = useState('Today');
   const [showDateDropdown, setShowDateDropdown] = useState(false);
   const [flippedTarget, setFlippedTarget] = useState<RevenueCategory | null>(null);
@@ -86,6 +135,7 @@ function DashboardInner() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('current');
   const [leadCounts, setLeadCounts] = useState({ hot: 0, cold: 0, warm: 0, neutral: 0 });
   const [salesInsights, setSalesInsights] = useState<any[]>([]);
+  const [revenueList, setRevenueList] = useState<RevenueCategory[]>(emptyRevenueList);
   const [engagementMediumData, setEngagementMediumData] = useState<any[]>([
     { name: 'WhatsApp', value: 0, fill: '#25D366' },
     { name: 'Telegram', value: 0, fill: '#0088cc' },
@@ -129,6 +179,9 @@ function DashboardInner() {
         // Calculate temperatures & engagement mediums
         const counts = { hot: 0, cold: 0, warm: 0, neutral: 0 };
         const mediumCounts = { whatsapp: 0, email: 0, telegram: 0 };
+        const opportunities = Object.fromEntries(
+          Object.entries(REVENUE_CONFIG).map(([key, config]) => [key, { ...config, count: 0, contacts: [] as any[] }])
+        ) as Record<keyof typeof REVENUE_CONFIG, RevenueCategory>;
         let totalMessages = 0;
         let totalReplies = 0;
 
@@ -147,6 +200,18 @@ function DashboardInner() {
             if (ch.includes('whatsapp')) mediumCounts.whatsapp++;
             else if (ch.includes('email')) mediumCounts.email++;
             else if (ch.includes('telegram')) mediumCounts.telegram++;
+
+            const bucket = classifyRevenueOpportunity(lead);
+            const activityDate = toDate(lead.lastInboundAt) || toDate(lead.sentimentLastUpdated) || toDate(lead.updatedAt) || toDate(lead.createdAt);
+            opportunities[bucket].contacts.push({
+              id: opportunities[bucket].contacts.length + 1,
+              leadId: String(lead.id || ''),
+              name: lead.person || lead.contactPerson || lead.name || 'Unknown',
+              company: lead.company || lead.companyName || 'Unknown Company',
+              platform: getLeadChannel(lead),
+              time: formatRelativeDate(activityDate),
+              note: lead.revenueOpportunityReason || lead.intent || lead.next || sentiment,
+            });
           }
 
           if (lead.messageCount) totalMessages += Number(lead.messageCount);
@@ -160,6 +225,12 @@ function DashboardInner() {
           { name: 'Email',    value: mediumCounts.email,    fill: '#F43F5E' },
         ]);
         setEngagementStats({ messages: totalMessages || 142, replies: totalReplies || 38 });
+        setRevenueList(
+          Object.keys(REVENUE_CONFIG).map((key) => {
+            const item = opportunities[key as keyof typeof REVENUE_CONFIG];
+            return { ...item, count: item.contacts.length, contacts: item.contacts.slice(0, 12) };
+          })
+        );
 
         // Calculate Sales Insights (last 30 days)
         const last30Days = Array.from({ length: 30 }, (_, i) => {
@@ -197,7 +268,17 @@ function DashboardInner() {
     fetchLeads();
   }, [selectedProjectId]);
 
-  const revenueList = useMemo(() => Object.values(REVENUE_DATA), []);
+  const openChatForContact = (contact: any) => {
+    const leadId = String(contact.leadId || '').trim();
+    if (!leadId) return;
+
+    const params = new URLSearchParams({
+      platform: String(contact.platform || 'Email').toLowerCase(),
+      leadId,
+    });
+    if (selectedProjectId && selectedProjectId !== 'current') params.set('productInfoId', selectedProjectId);
+    router.push(`/chats?${params.toString()}`);
+  };
 
   return (
     <main className="max-w-[1440px] mx-auto px-4 md:px-10 pb-10">
@@ -391,7 +472,7 @@ function DashboardInner() {
                       <span className="text-[13px] font-bold text-gray-800 flex items-center gap-1.5 whitespace-nowrap">
                         <span className="text-sm">{item.emoji}</span> {item.title}
                       </span>
-                      <p className="text-[10.5px] text-gray-500 font-medium leading-none mt-1 truncate">View {item.title.toLowerCase()} prospects</p>
+                      <p className="text-[10.5px] text-gray-500 font-medium leading-none mt-1 truncate">{REVENUE_DESCRIPTIONS[item.id]}</p>
                     </div>
                   </div>
                 ))}
@@ -411,19 +492,23 @@ function DashboardInner() {
               </div>
               
               <div className="flex-1 overflow-y-auto pr-2 scrollbar-hide space-y-2">
-                {flippedTarget?.contacts.map((contact) => (
-                  <div key={contact.id} className="flex items-center gap-3 w-full bg-white/60 p-2.5 rounded-2xl shadow-sm backdrop-blur-sm border border-white/50">
+                {flippedTarget?.contacts.length ? flippedTarget.contacts.map((contact) => (
+                  <button key={contact.id} onClick={() => openChatForContact(contact)} className="flex items-center gap-3 w-full bg-white/60 p-2.5 rounded-2xl shadow-sm backdrop-blur-sm border border-white/50 text-left hover:bg-white/90 transition-colors">
                     <span className={`text-lg font-black w-6 text-center opacity-60 ${flippedTarget.text}`}>{contact.id}</span>
                     <div className="w-10 h-10 rounded-full bg-black/10 shrink-0 overflow-hidden relative shadow-sm border border-white/80">
                       <div className="absolute inset-0 bg-gradient-to-tr from-black/5 to-transparent"></div>
                     </div>
                     <div className="flex-1 flex flex-col justify-center overflow-hidden">
-                      <span className="text-[13px] font-bold text-gray-800 leading-tight truncate">{contact.name}</span>
-                      <span className="text-[10px] text-gray-600 font-medium">{contact.platform}</span>
+                      <span className="text-[13px] font-bold text-gray-800 leading-tight truncate">{contact.company || contact.name}</span>
+                      <span className="text-[10px] text-gray-600 font-medium truncate">{contact.name} · {contact.platform}</span>
                     </div>
                     <span className="text-[10px] text-gray-400 font-bold tracking-tight bg-white/50 px-2 py-1 rounded-md shrink-0">{contact.time}</span>
+                  </button>
+                )) : (
+                  <div className="h-full flex items-center justify-center text-center text-xs font-bold text-gray-500 px-6">
+                    No engaged leads in this bucket yet.
                   </div>
-                ))}
+                )}
               </div>
             </div>
           </div>

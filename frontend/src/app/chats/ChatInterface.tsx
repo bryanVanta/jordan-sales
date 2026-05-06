@@ -287,6 +287,8 @@ const resolveDisplaySentiment = (
 const ChatInterface = () => {
   const searchParams = useSearchParams();
   const platformFromUrl = (searchParams?.get('platform') || 'email') as 'email' | 'whatsapp' | 'telegram';
+  const leadIdFromUrl = String(searchParams?.get('leadId') || '').trim();
+  const productInfoIdFromUrl = String(searchParams?.get('productInfoId') || '').trim();
   
   const [selectedCustomerId, setSelectedCustomerId] = useState<number>(1);
   const [showContactInfo, setShowContactInfo] = useState(true);
@@ -366,7 +368,9 @@ const ChatInterface = () => {
     const loadChatsFromBackend = async () => {
       try {
         setLoadingChats(true);
-        const response = await fetch(`${API_BASE_URL}/chats?channel=${encodeURIComponent(selectedChannel)}`, {
+        const params = new URLSearchParams({ channel: selectedChannel });
+        if (productInfoIdFromUrl) params.set('productInfoId', productInfoIdFromUrl);
+        const response = await fetch(`${API_BASE_URL}/chats?${params.toString()}`, {
           cache: 'no-store',
         });
         if (!response.ok) throw new Error(`Chat load failed (${response.status})`);
@@ -428,8 +432,15 @@ const ChatInterface = () => {
         loadedCustomerIdsRef.current = new Set(customers.map((customer) => customer.id));
         setSelectedCustomerId((prev) => {
           if (customers.length === 0) return 1;
+          const requestedCustomer = leadIdFromUrl
+            ? customers.find((customer) => String(customer.firebaseLeadId || '').trim() === leadIdFromUrl)
+            : null;
+          if (requestedCustomer) return requestedCustomer.id;
           return customers.some((customer) => customer.id === prev) ? prev : customers[0].id;
         });
+        if (leadIdFromUrl && customers.some((customer) => String(customer.firebaseLeadId || '').trim() === leadIdFromUrl)) {
+          setActiveView('chat');
+        }
       } catch (error) {
         if (!cancelled) {
           console.error('[Chat] Backend chat load failed:', error);
@@ -449,7 +460,7 @@ const ChatInterface = () => {
       cancelled = true;
       if (timer) clearInterval(timer);
     };
-  }, [selectedChannel]);
+  }, [selectedChannel, leadIdFromUrl, productInfoIdFromUrl]);
 
   // Real-time listener on `leads` collection — updates sentiment icons and manualReplyMode
   // without requiring a page refresh or waiting for the next outreach/inbound snapshot.

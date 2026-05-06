@@ -12,6 +12,7 @@ const {
   getSentimentDistribution,
   getSentimentTrends,
 } = require('../services/sentimentService');
+const { analyzeRevenueOpportunities } = require('../services/revenueOpportunityService');
 
 /**
  * POST /api/sentiment/trigger
@@ -58,6 +59,27 @@ router.post('/batch', async (req, res) => {
     });
   } catch (error) {
     console.error('[Sentiment API] Error in batch:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * POST /api/sentiment/revenue-opportunities
+ * Run revenue opportunity analysis for engaged leads.
+ */
+router.post('/revenue-opportunities', async (req, res) => {
+  try {
+    console.log('[Sentiment API] Starting revenue opportunity analysis');
+    const results = await analyzeRevenueOpportunities();
+
+    res.json({
+      success: true,
+      results,
+      message: 'Revenue opportunity analysis completed',
+      timestamp: new Date(),
+    });
+  } catch (error) {
+    console.error('[Sentiment API] Error in revenue opportunities:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -122,6 +144,7 @@ router.get('/health', (req, res) => {
       'distribution_tracking',
       'trend_analysis',
       'scheduled_daily_analysis',
+      'scheduled_daily_revenue_opportunity_analysis',
     ],
   });
 });

@@ -5,6 +5,7 @@
 
 const cron = require('node-cron');
 const { analyzeBatchSentiment } = require('./sentimentService');
+const { analyzeRevenueOpportunities } = require('./revenueOpportunityService');
 
 let jobs = [];
 
@@ -40,6 +41,34 @@ const scheduleDailySentimentAnalysis = () => {
     return job;
   } catch (error) {
     console.error('[Scheduler] Error scheduling sentiment analysis:', error.message);
+  }
+};
+
+const scheduleDailyRevenueOpportunityAnalysis = () => {
+  try {
+    console.log('[Scheduler] Setting up daily revenue opportunity analysis at 8:15am Malay time...');
+
+    const job = cron.schedule('15 8 * * *', async () => {
+      console.log('\n[Scheduler] Running scheduled revenue opportunity analysis at 8:15am Malay time...');
+      console.log(`[Scheduler] Timestamp: ${new Date().toISOString()}`);
+
+      try {
+        const results = await analyzeRevenueOpportunities();
+        console.log('[Scheduler] Revenue opportunity analysis completed successfully');
+        console.log('[Scheduler] Results:', results);
+      } catch (error) {
+        console.error('[Scheduler] Error during revenue opportunity analysis:', error.message);
+      }
+    }, {
+      timezone: 'Asia/Kuala_Lumpur'
+    });
+
+    jobs.push({ name: 'daily_revenue_opportunity_analysis', job, schedule: '15 8 * * *', timezone: 'MYT' });
+    console.log('[Scheduler] Daily revenue opportunity analysis scheduled for 8:15am MYT\n');
+
+    return job;
+  } catch (error) {
+    console.error('[Scheduler] Error scheduling revenue opportunity analysis:', error.message);
   }
 };
 
@@ -107,6 +136,7 @@ const initializeScheduledJobs = () => {
   console.log('\n================== INITIALIZING SCHEDULED JOBS ==================');
   
   scheduleDailySentimentAnalysis();
+  scheduleDailyRevenueOpportunityAnalysis();
   // Uncomment for more frequent analysis:
   // scheduleFrequentSentimentAnalysis();
   
@@ -117,6 +147,7 @@ const initializeScheduledJobs = () => {
 module.exports = {
   initializeScheduledJobs,
   scheduleDailySentimentAnalysis,
+  scheduleDailyRevenueOpportunityAnalysis,
   scheduleFrequentSentimentAnalysis,
   getScheduledJobs,
   stopAllJobs,

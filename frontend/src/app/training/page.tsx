@@ -676,7 +676,7 @@ function TrainingPageInner() {
 
               <div className="flex flex-col gap-5">
                 <FormInput label="Characteristics" value={characteristics} onChange={setCharacteristics} placeholder="e.g. Professional, witty, detail-oriented" />
-                <div className="space-y-1.5 flex flex-col items-start">
+                <div className="space-y-1.5 flex flex-col items-start relative group/textarea">
                   <div className="flex w-full items-center justify-between gap-2">
                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Customer Instructions</label>
                     <button
@@ -685,17 +685,30 @@ function TrainingPageInner() {
                       disabled={refineState === 'loading'}
                       title="Refine from Product & Services"
                       aria-label="Refine customer instructions from Product & Services"
-                      className="flex h-8 w-8 items-center justify-center bg-white border border-gray-100 rounded-xl text-blue-600 shadow-sm hover:bg-gray-50 hover:border-blue-200 transition-all disabled:opacity-60"
+                      className="flex h-8 w-8 items-center justify-center bg-white border border-gray-100 rounded-xl text-blue-600 shadow-sm hover:bg-gray-50 hover:border-blue-200 transition-all disabled:opacity-60 relative overflow-hidden"
                     >
-                      <Sparkles size={14} className={refineState === 'loading' ? 'animate-pulse' : ''} />
+                      {refineState === 'loading' ? (
+                        <div className="flex items-center justify-center">
+                          <div className="w-3 h-3 border-2 border-blue-600/20 border-t-blue-600 rounded-full animate-spin" />
+                        </div>
+                      ) : (
+                        <Sparkles size={14} />
+                      )}
                     </button>
                   </div>
-                  <textarea 
-                    value={customerInstructions}
-                    onChange={(e) => setCustomerInstructions(e.target.value)}
-                    placeholder="How should Jordan handle specific customer objections?"
-                    className="w-full bg-white border border-gray-100 rounded-xl px-4 py-3 text-[13px] font-bold text-gray-800 h-24 sm:h-32 resize-none focus:ring-2 focus:ring-blue-100 outline-none transition-all shadow-sm"
-                  />
+                  <div className="relative w-full overflow-hidden rounded-xl">
+                    <textarea 
+                      value={customerInstructions}
+                      onChange={(e) => setCustomerInstructions(e.target.value)}
+                      placeholder="How should Jordan handle specific customer objections?"
+                      className="w-full bg-white border border-gray-100 rounded-xl px-4 py-3 text-[13px] font-bold text-gray-800 h-24 sm:h-32 resize-none focus:ring-2 focus:ring-blue-100 outline-none transition-all shadow-sm scrollbar-hide"
+                    />
+                    {refineState === 'loading' && (
+                      <div className="absolute bottom-0 left-0 h-1 bg-blue-50/50 w-full overflow-hidden">
+                        <div className="h-full bg-blue-500 animate-progress-indeterminate" />
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -741,7 +754,7 @@ function TrainingPageInner() {
               <h2 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight">Product & Services</h2>
            </div>
 
-           <div className="flex flex-col gap-6 overflow-y-auto pr-2 custom-scrollbar">
+           <div className="flex flex-col gap-6 overflow-y-auto pr-2 custom-scrollbar scrollbar-hide">
               <FormInput label="Product Name" value={productName} onChange={setProductName} placeholder="e.g. Acme Enterprise AI" />
               <FormInput label="Description" value={description} onChange={setDescription} placeholder="Brief summary" />
               <FormInput label="Key Benefit" value={benefit} onChange={setBenefit} placeholder="Main selling point" />

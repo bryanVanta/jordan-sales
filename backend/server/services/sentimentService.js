@@ -125,7 +125,7 @@ const getInboundCustomerTexts = (messages = []) =>
  * neutral: Uncertain, minimal response, no clear intent
  * cold: Disengaged, no response, or negative signals
  */
-const analyzeSentimentWithAI = async (messages = []) => {
+const analyzeSentimentWithAI = async (messages = [], isCompleted = false) => {
   try {
     if (!messages || messages.length === 0) {
       return 'neutral';
@@ -141,8 +141,14 @@ const analyzeSentimentWithAI = async (messages = []) => {
       return weightedSentiment;
     }
 
-    const conversationText = customerTexts
-      .map((content, index) => `CUSTOMER MESSAGE ${index + 1}:\n${content}`)
+    const conversationText = messages
+      .filter((msg) => String(msg.status || '').toLowerCase() === 'received')
+      .map((msg, index) => {
+        const time = (msg.createdAt || msg.timestamp)?.toDate?.() || new Date(msg.createdAt || msg.timestamp);
+        const hoursAgo = Math.floor((Date.now() - new Date(time).getTime()) / (1000 * 60 * 60));
+        const timeStr = hoursAgo < 1 ? 'less than an hour ago' : hoursAgo < 24 ? `${hoursAgo} hours ago` : `${Math.floor(hoursAgo / 24)} days ago`;
+        return `CUSTOMER MESSAGE ${index + 1} (${timeStr}):\n${normalizeIntentText(msg.content || msg.messageContent || '')}`;
+      })
       .join('\n\n---\n\n');
 
     // Create prompt for sentiment analysis
@@ -184,12 +190,14 @@ RULE 3 — HOT REQUIRES CLEAR BUYING SIGNALS:
 RULE 4 — DON'T OVER-INFER FROM ONE MESSAGE:
   If the conversation is very short (1-2 customer messages total), default to NEUTRAL unless Rule 3
   signals are unmistakably present.
+  
+RULE 5 — ACCOUNT FOR TIME GAPS (STALENESS):
+  If the most recent customer message is more than 3 days old, the lead should be COLD or NEUTRAL
+  regardless of how "hot" the previous messages were. Urgency fades over time.
+  If the gap is more than 7 days, it is COLD.
+  **EXCEPTION:** If the lead is already marked as COMPLETED/WON/CLOSED, IGNORE Rule 5. A completed deal stays "hot" even if the customer is no longer replying.
 
-SCORING GUIDANCE:
-- HOT: Clear buying intent signals (Rule 3) present — multiple strong signals preferred
-- WARM: Genuine multi-message engagement with substance (Rule 2) — NOT just being polite
-- NEUTRAL: Short/generic/vague responses, early stage, or insufficient data (Rule 1 & 4)
-- COLD: Rejection, silence, or explicit disinterest
+LEAD COMPLETION STATUS: ${isCompleted ? 'COMPLETED/WON' : 'ACTIVE/IN-PROGRESS'}
 
 Respond with ONLY the sentiment classification word: hot, warm, neutral, or cold
 Do not include any other text or explanation.`;
@@ -284,22 +292,45 @@ const analyzeSingleLead = async (leadId) => {
     let sentiment;
     const hasInboundReply = recentMessages.some((msg) => String(msg.status || '').toLowerCase() === 'received');
 
+    const isCompleted = ['completed', 'complete', 'won', 'closed', 'finished'].includes(String(leadData.status || leadData.state || '').toLowerCase());
+
     if (!hasInboundReply) {
       const lastMsg = recentMessages[recentMessages.length - 1];
       const lastTime = (lastMsg.createdAt || lastMsg.timestamp)?.toDate?.() || new Date(lastMsg.createdAt || lastMsg.timestamp);
       const hoursSinceLastOutbound = (Date.now() - new Date(lastTime).getTime()) / (1000 * 60 * 60);
-      sentiment = hoursSinceLastOutbound >= 24 ? 'cold' : 'neutral';
+      
+      // If completed, don't force cold. Otherwise, use the 24h cold heuristic.
+      if (isCompleted) {
+        sentiment = previousSentiment || 'neutral';
+      } else {
+        sentiment = hoursSinceLastOutbound >= 24 ? 'cold' : 'neutral';
+      }
     } else {
       // Analyze sentiment using AI
-      sentiment = await analyzeSentimentWithAI(recentMessages);
+      sentiment = await analyzeSentimentWithAI(recentMessages, isCompleted);
 
       // If the last message in the conversation is outbound (customer hasn't replied to it yet),
       // cap at warm — can't be hot while waiting for a reply.
       const lastMsg = recentMessages[recentMessages.length - 1];
+      const lastTime = (lastMsg.createdAt || lastMsg.timestamp)?.toDate?.() || new Date(lastMsg.createdAt || lastMsg.timestamp);
+      const hoursSinceLastMessage = (Date.now() - new Date(lastTime).getTime()) / (1000 * 60 * 60);
       const lastMsgIsOutbound = String(lastMsg.status || '').toLowerCase() !== 'received';
-      if (lastMsgIsOutbound && sentiment === 'hot') {
-        sentiment = 'warm';
-        console.log(`[Sentiment AI] Capped lead ${leadId} from hot → warm: last message is outbound (awaiting reply)`);
+
+      if (lastMsgIsOutbound && !isCompleted) {
+        // COOLING HEURISTIC:
+        // 1. If waiting for reply > 72 hours (3 days), force COLD.
+        // 2. If waiting for reply > 48 hours (2 days), downgrade HOT -> WARM.
+        if (hoursSinceLastMessage >= 72) {
+          sentiment = 'cold';
+          console.log(`[Sentiment AI] Cooled lead ${leadId} to cold: no reply for ${Math.floor(hoursSinceLastMessage)}h`);
+        } else if (hoursSinceLastMessage >= 48 && sentiment === 'hot') {
+          sentiment = 'warm';
+          console.log(`[Sentiment AI] Cooled lead ${leadId} from hot → warm: no reply for ${Math.floor(hoursSinceLastMessage)}h`);
+        } else if (sentiment === 'hot') {
+          // Rule 3 already says: can't be hot while waiting for a reply (even if < 48h)
+          sentiment = 'warm';
+          console.log(`[Sentiment AI] Capped lead ${leadId} from hot → warm: last message is outbound (awaiting reply)`);
+        }
       }
     }
 

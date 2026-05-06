@@ -47,6 +47,103 @@ const getTemperatureDate = (lead: any): Date | null =>
   toDate(lead.updatedAt) ||
   toDate(lead.createdAt);
 
+const getLeadActivityDate = (lead: any): Date | null =>
+  toDate(lead.lastInboundAt) ||
+  toDate(lead.lastMessageTime) ||
+  toDate(lead.sentimentLastUpdated) ||
+  toDate(lead.updatedAt) ||
+  toDate(lead.createdAt);
+
+const inferLeadIndustry = (lead: any): string => {
+  const raw = [
+    lead.industry,
+    lead.businessType,
+    lead.category,
+    lead.targetCustomer,
+    lead.intent,
+    lead.company,
+    lead.companyName,
+  ].map((value) => String(value || '').toLowerCase()).join(' ');
+
+  const matches = [
+    ['hotel', 'hospitality'],
+    ['restaurant', 'restaurant'],
+    ['cafe', 'restaurant'],
+    ['clinic', 'healthcare'],
+    ['medical', 'healthcare'],
+    ['dental', 'healthcare'],
+    ['school', 'education'],
+    ['college', 'education'],
+    ['real estate', 'real estate'],
+    ['property', 'real estate'],
+    ['retail', 'retail'],
+    ['salon', 'beauty'],
+    ['gym', 'fitness'],
+    ['logistics', 'logistics'],
+    ['manufacturer', 'manufacturing'],
+    ['factory', 'manufacturing'],
+  ] as const;
+
+  const found = matches.find(([keyword]) => raw.includes(keyword));
+  if (found) return found[1];
+
+  const explicit = String(lead.industry || lead.businessType || lead.category || '').trim();
+  return explicit || 'business';
+};
+
+const inferLeadCountry = (lead: any): string => {
+  const raw = String(
+    lead.location ||
+    lead.city ||
+    lead.state ||
+    lead.country ||
+    lead.address ||
+    ''
+  ).toLowerCase();
+
+  if (/\b(malaysia|kuala lumpur|selangor|johor|penang|sabah|sarawak|putrajaya|melaka|malacca|perak|kedah|kelantan|pahang|terengganu|negeri sembilan)\b/.test(raw)) return 'Malaysia';
+  if (/\b(singapore)\b/.test(raw)) return 'Singapore';
+  if (/\b(indonesia|jakarta|bali|bandung|surabaya)\b/.test(raw)) return 'Indonesia';
+  if (/\b(thailand|bangkok|phuket|chiang mai)\b/.test(raw)) return 'Thailand';
+  if (/\b(vietnam|ho chi minh|hanoi)\b/.test(raw)) return 'Vietnam';
+  if (/\b(philippines|manila|cebu)\b/.test(raw)) return 'Philippines';
+  if (/\b(united states|usa|us|california|new york|texas)\b/.test(raw)) return 'United States';
+  if (/\b(united kingdom|uk|england|london)\b/.test(raw)) return 'United Kingdom';
+  if (/\b(australia|sydney|melbourne|brisbane)\b/.test(raw)) return 'Australia';
+
+  const explicit = String(lead.country || '').trim();
+  return explicit || 'Malaysia';
+};
+
+const getTopEngagedSegment = (leads: any[]): { industry: string; country: string } => {
+  const engaged = leads
+    .filter((lead) => Number(lead.messageCount || 0) > 0 || !!lead.lastInboundAt || !!lead.lastOutreach)
+    .map((lead) => ({ lead, activityMs: getLeadActivityDate(lead)?.getTime() || 0 }))
+    .sort((a, b) => b.activityMs - a.activityMs)
+    .slice(0, 25);
+
+  const counts = new Map<string, { count: number; industry: string; country: string }>();
+  engaged.forEach(({ lead }) => {
+    const industry = inferLeadIndustry(lead);
+    const country = inferLeadCountry(lead);
+    const key = `${industry}::${country.toLowerCase()}`;
+    const current = counts.get(key) || { count: 0, industry, country };
+    counts.set(key, { ...current, count: current.count + 1 });
+  });
+
+  return [...counts.values()].sort((a, b) => b.count - a.count)[0] || { industry: 'business', country: 'Malaysia' };
+};
+
+interface NewsInsight {
+  status: 'idle' | 'loading' | 'ready' | 'empty' | 'missing-key' | 'error';
+  industry: string;
+  country: string;
+  title: string;
+  description: string;
+  source: string;
+  url: string;
+}
+
 const engagementData = [
   { day: 'M', value: 20 }, { day: 'T', value: 40 }, { day: 'W', value: 30 }, 
   { day: 'T', value: 50 }, { day: 'F', value: 45 }, { day: 'S', value: 15 }, { day: 'S', value: 10 }
@@ -142,6 +239,15 @@ function DashboardInner() {
     { name: 'Email',    value: 0, fill: '#F43F5E' },
   ]);
   const [engagementStats, setEngagementStats] = useState({ messages: 0, replies: 0 });
+  const [newsInsight, setNewsInsight] = useState<NewsInsight>({
+    status: 'idle',
+    industry: 'business',
+    country: 'Malaysia',
+    title: '',
+    description: '',
+    source: '',
+    url: '',
+  });
 
   useEffect(() => {
     const productInfoIdFromUrl = searchParams.get('productInfoId');
@@ -175,6 +281,7 @@ function DashboardInner() {
         const res = await fetch(endpoint);
         const json = await res.json();
         const leads = (json.data?.leads || json.data || []) as any[];
+        const topSegment = getTopEngagedSegment(leads);
 
         // Calculate temperatures & engagement mediums
         const counts = { hot: 0, cold: 0, warm: 0, neutral: 0 };
@@ -260,6 +367,56 @@ function DashboardInner() {
         });
 
         setSalesInsights(chartData);
+        setNewsInsight((prev) => ({ ...prev, status: 'loading', industry: topSegment.industry, country: topSegment.country }));
+        try {
+          const newsParams = new URLSearchParams({
+            industry: topSegment.industry,
+            country: topSegment.country,
+          });
+          const newsRes = await fetch(`/api/news-insights?${newsParams.toString()}`, { cache: 'no-store' });
+          const newsJson = await newsRes.json();
+          if (!newsJson.configured) {
+            setNewsInsight({
+              status: 'missing-key',
+              industry: topSegment.industry,
+              country: topSegment.country,
+              title: 'NewsAPI key not configured',
+              description: 'Add NEWS_API_KEY in frontend/.env to pull live tech news for this segment.',
+              source: '',
+              url: '',
+            });
+          } else if (newsJson.article) {
+            setNewsInsight({
+              status: 'ready',
+              industry: topSegment.industry,
+              country: topSegment.country,
+              title: newsJson.article.title || '',
+              description: newsJson.article.description || '',
+              source: newsJson.article.source || 'News',
+              url: newsJson.article.url || '',
+            });
+          } else {
+            setNewsInsight({
+              status: 'empty',
+              industry: topSegment.industry,
+              country: topSegment.country,
+              title: `No recent ${topSegment.industry} tech news found`,
+              description: 'Try again later or broaden the active lead segment.',
+              source: '',
+              url: '',
+            });
+          }
+        } catch (newsError) {
+          setNewsInsight({
+            status: 'error',
+            industry: topSegment.industry,
+            country: topSegment.country,
+            title: 'Could not load news insight',
+            description: 'News lookup failed. Dashboard data still loaded normally.',
+            source: '',
+            url: '',
+          });
+        }
       } catch (err) {
         console.error('Failed to fetch leads for dashboard:', err);
       }
@@ -282,11 +439,11 @@ function DashboardInner() {
 
   return (
     <main className="max-w-[1440px] mx-auto px-4 md:px-10 pb-10">
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-6 items-start">
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         
         {/* ROW 1 */}
         {/* Sales Insights (7/12 columns) */}
-        <div className="xl:col-span-7 bg-white rounded-[32px] p-6 sm:p-8 shadow-sm border border-gray-100/50 min-h-[420px] flex flex-col">
+        <div className="lg:col-span-7 bg-white rounded-[32px] p-6 sm:p-8 shadow-sm border border-gray-100/50 min-h-[420px] flex flex-col">
           <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
             <h2 className="text-xl sm:text-2xl font-bold text-gray-800 tracking-tight">Sales Insights</h2>
             <div className="flex flex-wrap gap-4 sm:gap-6 items-center">
@@ -311,7 +468,7 @@ function DashboardInner() {
         </div>
 
         {/* Lead Temperature Overview (5/12 columns) */}
-        <div className="bg-white rounded-[32px] p-6 sm:p-8 shadow-sm border border-gray-100/50 relative overflow-hidden flex flex-col xl:col-span-5 min-h-[420px]">
+        <div className="bg-white rounded-[32px] p-6 sm:p-8 shadow-sm border border-gray-100/50 relative overflow-hidden flex flex-col lg:col-span-5 min-h-[420px]">
           <div className="flex justify-between items-center mb-6 relative z-20 gap-2">
             <h2 className="text-lg sm:text-[1.3rem] font-bold text-gray-800 tracking-tight leading-tight w-full sm:w-[60%]">Lead Temperature Overview</h2>
             <div className="relative">
@@ -399,7 +556,7 @@ function DashboardInner() {
 
         {/* ROW 2 */}
         {/* Engagement Medium (4/12 columns) */}
-        <div className="bg-white rounded-[32px] p-6 shadow-sm border border-gray-100/50 flex flex-col xl:col-span-4 min-h-[350px]">
+        <div className="bg-white rounded-[32px] p-6 shadow-sm border border-gray-100/50 flex flex-col lg:col-span-4 min-h-[330px]">
           <h2 className="text-[17px] font-bold text-gray-800 tracking-tight mb-4">Engagement Medium</h2>
           <div className="flex-1 flex flex-col w-full h-full space-y-2">
             <div className="flex-1 w-full h-[150px] min-h-[150px] relative">
@@ -437,26 +594,47 @@ function DashboardInner() {
         </div>
 
         {/* AI Insights (4/12 columns) */}
-        <div className="bg-[#E7F0FF] rounded-[32px] p-6 sm:p-8 shadow-sm flex flex-col justify-center items-center border border-blue-100 relative overflow-hidden group hover:shadow-md transition-shadow xl:col-span-4 min-h-[350px]">
+        <div className="bg-[#E7F0FF] rounded-[32px] p-6 sm:p-7 shadow-sm flex flex-col justify-center items-center border border-blue-100 relative overflow-hidden group hover:shadow-md transition-shadow lg:col-span-4 min-h-[380px] lg:-mt-3">
           <div className="absolute top-0 right-0 w-full h-full overflow-hidden pointer-events-none">
             <div className="absolute -top-10 -right-10 w-40 h-40 bg-blue-200/40 rounded-full blur-3xl"></div>
             <div className="absolute -bottom-10 -left-10 w-40 h-40 bg-blue-100/40 rounded-full blur-3xl"></div>
           </div>
           <div className="z-10 flex flex-col items-center justify-center h-full space-y-4 sm:space-y-5 w-full max-w-sm">
-            <h2 className="text-[1.4rem] sm:text-[1.8rem] font-black text-blue-900 tracking-tight text-center italic opacity-85 decoration-4 underline-offset-4">AI Insights</h2>
+            <h2 className="text-[1.35rem] sm:text-[1.65rem] font-black text-blue-900 tracking-tight text-center italic opacity-85 decoration-4 underline-offset-4">Market Insights</h2>
             <div className="bg-white/60 backdrop-blur-sm p-4 sm:p-5 rounded-[20px] border border-white w-full">
-              <p className="text-blue-950 text-center font-medium leading-relaxed text-sm sm:text-[15px]">
-                Lead engagement is up by <span className="font-bold text-blue-700">25%</span>. Focus on resolving <span className="font-bold text-yellow-600">Warm</span> leads to double your immediate conversions.
+              <div className="text-[10px] font-black uppercase tracking-wider text-blue-500 text-center mb-2">
+                {newsInsight.status === 'loading' ? 'Finding market signal' : `${newsInsight.country} ${newsInsight.industry} tech signal`}
+              </div>
+              <p className="text-blue-950 text-center font-bold leading-snug text-sm sm:text-[15px]">
+                {newsInsight.status === 'loading'
+                  ? 'Scanning recent tech news for the most active engaged segment...'
+                  : newsInsight.title || 'No insight available yet'}
               </p>
+              {newsInsight.description && (
+                <p className="text-blue-900/70 text-center font-medium leading-relaxed text-xs mt-2 line-clamp-3">
+                  {newsInsight.description}
+                </p>
+              )}
+              {newsInsight.source && (
+                <p className="text-blue-500 text-center font-black text-[10px] uppercase tracking-wider mt-3">
+                  {newsInsight.source}
+                </p>
+              )}
             </div>
-            <button className="bg-white text-blue-800 px-6 sm:px-8 py-2.5 sm:py-3 w-full rounded-full font-bold shadow-sm text-xs sm:text-sm border border-blue-100 hover:bg-blue-50 transition-colors hover:-translate-y-1 transform duration-300">
-               Explore Strategy
-            </button>
+            {newsInsight.url ? (
+              <a href={newsInsight.url} target="_blank" rel="noreferrer" className="bg-white text-blue-800 px-6 sm:px-8 py-2.5 sm:py-3 w-full rounded-full font-bold shadow-sm text-xs sm:text-sm border border-blue-100 hover:bg-blue-50 transition-colors hover:-translate-y-1 transform duration-300 text-center">
+                Open Article
+              </a>
+            ) : (
+              <button disabled className="bg-white/70 text-blue-800/50 px-6 sm:px-8 py-2.5 sm:py-3 w-full rounded-full font-bold shadow-sm text-xs sm:text-sm border border-blue-100 cursor-not-allowed">
+                Open Article
+              </button>
+            )}
           </div>
         </div>
 
         {/* Revenue Opportunities Flippable Card - (4/12 columns) */}
-        <div className="xl:col-span-4 min-h-[350px]" style={{ perspective: '1200px' }}>
+        <div className="lg:col-span-4 min-h-[330px]" style={{ perspective: '1200px' }}>
           <div className="relative w-full h-full transition-transform duration-700 ease-[cubic-bezier(0.4,0,0.2,1)]" style={{ transformStyle: 'preserve-3d', transform: flippedTarget ? 'rotateY(180deg)' : 'rotateY(0deg)' }}>
             
             {/* Front Side */}

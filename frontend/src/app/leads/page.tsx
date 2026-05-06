@@ -38,7 +38,7 @@ function LeadsFooterPortal({ handleAdd, handleEdit, handleOutreach, handleExport
       {leadsButtonsEl && ReactDOM.createPortal(
         <div className="flex flex-wrap items-center justify-center gap-2">
           <button onClick={handleAdd} className="flex items-center gap-2 bg-gray-900 border border-white/10 text-white px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-bold shadow-2xl hover:bg-black transition-all transform hover:-translate-y-1">
-            <div className="w-5 h-5 rounded-md bg-blue-500 flex items-center justify-center"><Plus size={14} strokeWidth={3} /></div> Add Projects
+            <div className="w-5 h-5 rounded-md bg-blue-500 flex items-center justify-center"><Plus size={14} strokeWidth={3} /></div> Add Leads
           </button>
           <button onClick={handleExport} className="flex items-center gap-2 bg-white border border-gray-100 px-4 sm:px-6 py-2.5 sm:py-3 rounded-[18px] text-[11px] sm:text-[12px] font-black text-gray-800 shadow-xl hover:bg-gray-50 transition-all transform hover:-translate-y-1">
             <FileDown size={16} className="text-blue-500" /> Export PDF
@@ -481,7 +481,9 @@ function LeadsPageInner() {
         intent: formData.intent,
         next: formData.next,
         nextAction: formData.next,
-        channel: formData.channel,
+        channel: modalMode === 'add' 
+          ? (formData.whatsapp.trim() ? 'Whatsapp' : formData.email.trim() ? 'Email' : formData.phone.trim() ? 'Phone' : 'Email') 
+          : formData.channel,
       };
 
       if (isBulkEdit) {
@@ -497,8 +499,12 @@ function LeadsPageInner() {
         }
       }
       if (modalMode === 'add') {
-        payload.temp = formData.temp;
-        payload.leadTemperature = formData.temp;
+        payload.temp = 'Neutral';
+        payload.sentiment = 'neutral';
+        payload.leadTemperature = 'Neutral';
+        payload.status = 'new';
+        payload.next = 'Follow Up';
+        payload.nextAction = 'Follow Up';
       }
 
       const leadIds = modalMode === 'add' ? [''] : selectedProjects;
@@ -604,7 +610,7 @@ function LeadsPageInner() {
               type="text" 
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search projects..." 
+              placeholder="Search leads..." 
               className="w-full bg-white border border-gray-100 rounded-xl py-2 pl-10 pr-4 text-[13px] font-bold outline-none focus:ring-2 focus:ring-blue-100 transition-all placeholder:text-gray-400 shadow-sm"
             />
           </div>
@@ -870,7 +876,7 @@ function LeadsPageInner() {
              <div className="flex justify-between items-center mb-6 text-left">
                 <div>
                   <h2 className="text-2xl font-black text-gray-900 tracking-tight">
-                    {modalMode === 'add' ? 'New Lead' : isBulkEdit ? `Edit ${selectedProjects.length} Leads` : 'Edit Lead'}
+                    {modalMode === 'add' ? 'Add Lead' : isBulkEdit ? `Edit ${selectedProjects.length} Leads` : 'Edit Lead'}
                   </h2>
                   <p className="text-gray-400 font-bold text-[11px] uppercase tracking-widest mt-1">Lead Database</p>
                 </div>
@@ -914,30 +920,34 @@ function LeadsPageInner() {
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Location</label>
                   <input value={formData.location} onChange={e => setFormData({...formData, location: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold focus:ring-2 focus:ring-blue-100 transition-all outline-none" />
                 </div>
-                <div className={modalMode === 'add' ? 'grid grid-cols-2 gap-4' : 'space-y-4'}>
-                   {modalMode === 'add' && (
-                     <div className="space-y-1.5 flex flex-col items-start text-left">
-                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Temperature</label>
-                      <select value={formData.temp} onChange={e => setFormData({...formData, temp: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold outline-none">
-                        {['Hot', 'Warm', 'Cold', 'Neutral'].map(v => <option key={v} value={v}>{v}</option>)}
+                {modalMode === 'edit' && (
+                  <div className={modalMode === 'add' ? 'grid grid-cols-2 gap-4' : 'space-y-4'}>
+                    {modalMode === 'add' && (
+                      <div className="space-y-1.5 flex flex-col items-start text-left">
+                        <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Temperature</label>
+                        <select value={formData.temp} onChange={e => setFormData({...formData, temp: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold outline-none">
+                          {['Hot', 'Warm', 'Cold', 'Neutral'].map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      </div>
+                    )}
+                    <div className="space-y-1.5 flex flex-col items-start text-left">
+                      <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Channel</label>
+                      <select value={formData.channel} onChange={e => setFormData({...formData, channel: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold outline-none">
+                        {isBulkEdit && <option value="">Keep Existing</option>}
+                        {['Email', 'Whatsapp', 'Telegram'].map(v => <option key={v} value={v}>{v}</option>)}
                       </select>
-                     </div>
-                   )}
-                   <div className="space-y-1.5 flex flex-col items-start text-left">
-                     <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Channel</label>
-                    <select value={formData.channel} onChange={e => setFormData({...formData, channel: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold outline-none">
+                    </div>
+                  </div>
+                )}
+                {modalMode === 'edit' && (
+                  <div className="space-y-1.5 flex flex-col items-start text-left">
+                    <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Next Action</label>
+                    <select value={formData.next} onChange={e => setFormData({...formData, next: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold outline-none">
                       {isBulkEdit && <option value="">Keep Existing</option>}
-                      {['Email', 'Whatsapp', 'Telegram'].map(v => <option key={v} value={v}>{v}</option>)}
+                      {['Follow Up', 'Send Promo', 'Close Deal', 'Escalate'].map(v => <option key={v} value={v}>{v}</option>)}
                     </select>
-                   </div>
-                </div>
-                <div className="space-y-1.5 flex flex-col items-start text-left">
-                  <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Next Action</label>
-                  <select value={formData.next} onChange={e => setFormData({...formData, next: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold outline-none">
-                    {isBulkEdit && <option value="">Keep Existing</option>}
-                    {['Follow Up', 'Send Promo', 'Close Deal', 'Escalate'].map(v => <option key={v} value={v}>{v}</option>)}
-                  </select>
-                </div>
+                  </div>
+                )}
                 <div className="space-y-1.5 flex flex-col items-start text-left">
                   <label className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">Intent / Context</label>
                   <textarea value={formData.intent} onChange={e => setFormData({...formData, intent: e.target.value})} className="w-full bg-gray-50 border-none rounded-xl px-4 py-3 text-sm font-bold h-20 resize-none outline-none focus:ring-2 focus:ring-blue-100 transition-all" />

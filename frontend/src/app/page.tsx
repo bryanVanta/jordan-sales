@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { ChevronDown, RotateCcw, Flame, Snowflake, Sun, Cloud, TrendingUp } from 'lucide-react';
+import { RotateCcw, Flame, Snowflake, Sun, Cloud } from 'lucide-react';
 
 const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:5000';
 const API_BASE_URL = `${BACKEND_URL}/api`;
@@ -40,12 +40,6 @@ const normalizeSentiment = (lead: any): 'hot' | 'warm' | 'cold' | 'neutral' => {
   if (value === 'hot' || value === 'warm' || value === 'cold') return value;
   return 'neutral';
 };
-
-const getTemperatureDate = (lead: any): Date | null =>
-  toDate(lead.sentimentLastUpdated) ||
-  toDate(lead.lastWarmHotAlertSentAt) ||
-  toDate(lead.updatedAt) ||
-  toDate(lead.createdAt);
 
 const getLeadActivityDate = (lead: any): Date | null =>
   toDate(lead.lastInboundAt) ||
@@ -227,14 +221,11 @@ const classifyRevenueOpportunity = (lead: any): keyof typeof REVENUE_CONFIG => {
 
 function DashboardInner() {
   const router = useRouter();
-  const [dateFilter, setDateFilter] = useState('Today');
-  const [showDateDropdown, setShowDateDropdown] = useState(false);
   const [flippedTarget, setFlippedTarget] = useState<RevenueCategory | null>(null);
 
   const searchParams = useSearchParams();
   const [selectedProjectId, setSelectedProjectId] = useState<string>('current');
   const [leadCounts, setLeadCounts] = useState({ hot: 0, cold: 0, warm: 0, neutral: 0 });
-  const [growthCounts, setGrowthCounts] = useState({ hot: 0, cold: 0, warm: 0, neutral: 0 });
   const [salesInsights, setSalesInsights] = useState<any[]>([]);
   const [revenueList, setRevenueList] = useState<RevenueCategory[]>(emptyRevenueList);
   const [engagementMediumData, setEngagementMediumData] = useState<any[]>([
@@ -289,14 +280,6 @@ function DashboardInner() {
 
         // Calculate temperatures & engagement mediums
         const counts = { hot: 0, cold: 0, warm: 0, neutral: 0 };
-        const gCounts = { hot: 0, cold: 0, warm: 0, neutral: 0 };
-
-        const thresholdDate = new Date();
-        thresholdDate.setHours(0, 0, 0, 0);
-        if (dateFilter === 'Yesterday') thresholdDate.setDate(thresholdDate.getDate() - 1);
-        else if (dateFilter === '3 days ago') thresholdDate.setDate(thresholdDate.getDate() - 3);
-        else if (dateFilter === '7 days ago') thresholdDate.setDate(thresholdDate.getDate() - 7);
-        const thresholdStr = toLocalDateKey(thresholdDate);
         const mediumCounts = { whatsapp: 0, email: 0, telegram: 0 };
         const opportunities = Object.fromEntries(
           Object.entries(REVENUE_CONFIG).map(([key, config]) => [key, { ...config, count: 0, contacts: [] as any[] }])
@@ -306,11 +289,6 @@ function DashboardInner() {
 
         leads.forEach((lead) => {
           const sentiment = normalizeSentiment(lead);
-
-          const leadDate = getTemperatureDate(lead);
-          if (leadDate && toLocalDateKey(leadDate) >= thresholdStr) {
-            gCounts[sentiment]++;
-          }
 
           if (sentiment === 'hot') counts.hot++;
           else if (sentiment === 'warm') counts.warm++;
@@ -344,7 +322,6 @@ function DashboardInner() {
         });
 
         setLeadCounts(counts);
-        setGrowthCounts(gCounts);
         setEngagementMediumData([
           { name: 'WhatsApp', value: mediumCounts.whatsapp, fill: '#25D366' },
           { name: 'Telegram', value: mediumCounts.telegram, fill: '#0088cc' },
@@ -359,6 +336,16 @@ function DashboardInner() {
         );
 
         // Calculate Sales Insights (last 30 days)
+        const last30Days = Array.from({ length: 30 }, (_, i) => {
+          const d = new Date();
+          d.setDate(d.getDate() - (29 - i));
+          return toLocalDateKey(d);
+        });
+        const emptyThirtyDayChart = last30Days.map(dateStr => {
+          const [, month, day] = dateStr.split('-');
+          return { name: `${day}/${month}`, dateStr, hot: 0, cold: 0, warm: 0 };
+        });
+
         // TRY NEW ACCURATE PG HISTORY FIRST
         try {
           const trendParams = new URLSearchParams({
@@ -369,7 +356,18 @@ function DashboardInner() {
           if (trendRes.ok) {
             const trendJson = await trendRes.json();
             if (trendJson.success && Array.isArray(trendJson.data) && trendJson.data.length > 0) {
-              setSalesInsights(trendJson.data);
+              const byDate = new Map(trendJson.data.map((item: any) => [String(item.dateStr || ''), item]));
+              setSalesInsights(emptyThirtyDayChart.map((day) => {
+                const source = byDate.get(day.dateStr) as any;
+                return source
+                  ? {
+                      ...day,
+                      hot: Number(source.hot || 0),
+                      warm: Number(source.warm || 0),
+                      cold: Number(source.cold || 0),
+                    }
+                  : day;
+              }));
             } else {
               throw new Error('No trend data in response');
             }
@@ -377,17 +375,9 @@ function DashboardInner() {
             throw new Error('API failed');
           }
         } catch (trendError) {
-          console.warn('[Dashboard] Falling back to local chart calculation:', trendError.message);
-          const last30Days = Array.from({ length: 30 }, (_, i) => {
-            const d = new Date();
-            d.setDate(d.getDate() - (29 - i));
-            return toLocalDateKey(d);
-          });
-
-          const chartData = last30Days.map(dateStr => {
-            const [, month, day] = dateStr.split('-');
-            return { name: `${day}/${month}`, dateStr, hot: 0, cold: 0, warm: 0 };
-          });
+          const trendMessage = trendError instanceof Error ? trendError.message : String(trendError);
+          console.warn('[Dashboard] Falling back to local chart calculation:', trendMessage);
+          const chartData = emptyThirtyDayChart.map((day) => ({ ...day }));
 
           leads.forEach((lead) => {
             const sentiment = normalizeSentiment(lead);
@@ -463,7 +453,7 @@ function DashboardInner() {
     };
 
     fetchLeads();
-  }, [selectedProjectId, dateFilter]);
+  }, [selectedProjectId]);
 
   const openChatForContact = (contact: any) => {
     const leadId = String(contact.leadId || '').trim();
@@ -509,24 +499,8 @@ function DashboardInner() {
 
         {/* Lead Temperature Overview (5/12 columns) */}
         <div className="bg-white rounded-[32px] p-6 sm:p-8 shadow-sm border border-gray-100/50 relative overflow-hidden flex flex-col lg:col-span-5 min-h-[420px]">
-          <div className="flex justify-between items-center mb-6 relative z-20 gap-2">
-            <h2 className="text-lg sm:text-[1.3rem] font-bold text-gray-800 tracking-tight leading-tight w-full sm:w-[60%]">Lead Temperature Overview</h2>
-            <div className="relative">
-              <button 
-                onClick={() => setShowDateDropdown(!showDateDropdown)}
-                className="flex items-center gap-1 text-[13px] bg-gray-50 text-gray-700 px-4 py-2 rounded-full border border-gray-200 font-medium hover:bg-gray-100 transition-colors shadow-sm">
-                {dateFilter} <ChevronDown size={14} className="text-gray-500" />
-              </button>
-              {showDateDropdown && (
-                <div className="absolute right-0 top-full mt-2 bg-white rounded-xl shadow-lg border border-gray-100 overflow-hidden z-30 w-36">
-                  {['Today', 'Yesterday', '3 days ago', '7 days ago'].map(opt => (
-                     <div key={opt} onClick={() => { setDateFilter(opt); setShowDateDropdown(false); }} className="px-4 py-3 border-b border-gray-50 last:border-0 text-sm hover:bg-gray-50 cursor-pointer font-medium text-gray-700 transition-colors">
-                       {opt}
-                     </div>
-                  ))}
-                </div>
-              )}
-            </div>
+          <div className="flex items-center mb-6 relative z-20 gap-2">
+            <h2 className="text-lg sm:text-[1.3rem] font-bold text-gray-800 tracking-tight leading-tight">Lead Temperature Overview</h2>
           </div>
           
           <div className="flex-1 relative">
@@ -540,9 +514,6 @@ function DashboardInner() {
                 <Flame strokeWidth={1} className="absolute -right-3 -bottom-3 text-orange-200 opacity-40 w-12 h-12 sm:w-16 sm:h-16" />
                 <div className="flex items-center gap-3 mb-2 z-10">
                   <span className="text-orange-900 font-bold text-sm sm:text-base">Hot</span>
-                  <div className="bg-white/60 text-orange-700 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold flex items-center gap-0.5 shadow-sm border border-orange-100/50">
-                     <TrendingUp size={12} strokeWidth={3} /> +{growthCounts.hot}
-                  </div>
                 </div>
                 <div className="flex items-end gap-2 text-orange-600 z-10">
                   <span className="text-4xl sm:text-5xl font-black tracking-tighter">{leadCounts.hot}</span>
@@ -554,9 +525,6 @@ function DashboardInner() {
                 <Snowflake strokeWidth={1} className="absolute -right-3 -bottom-3 text-blue-200 opacity-40 w-12 h-12 sm:w-16 sm:h-16" />
                 <div className="flex items-center gap-2 mb-2 z-10">
                   <span className="text-blue-900 font-bold text-sm sm:text-base">Cold</span>
-                  <div className="bg-white/60 text-blue-700 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold flex items-center gap-0.5 shadow-sm border border-blue-100/50">
-                     <TrendingUp size={12} strokeWidth={3} /> +{growthCounts.cold}
-                  </div>
                 </div>
                 <div className="flex items-end gap-2 text-blue-600 z-10">
                   <span className="text-4xl font-black tracking-tighter">{leadCounts.cold}</span>
@@ -568,9 +536,6 @@ function DashboardInner() {
                 <Sun strokeWidth={1} className="absolute -right-3 -bottom-3 text-yellow-200 opacity-50 w-12 h-12 sm:w-16 sm:h-16" />
                 <div className="flex items-center gap-3 mb-2 z-10">
                   <span className="text-yellow-900 font-bold text-sm sm:text-base">Warm</span>
-                  <div className="bg-white/60 text-yellow-700 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold flex items-center gap-0.5 shadow-sm border border-yellow-100/50">
-                     <TrendingUp size={12} strokeWidth={3} /> +{growthCounts.warm}
-                  </div>
                 </div>
                 <div className="flex items-end gap-2 text-yellow-600 z-10">
                   <span className="text-4xl sm:text-5xl font-black tracking-tighter">{leadCounts.warm}</span>
@@ -582,9 +547,6 @@ function DashboardInner() {
                 <Cloud strokeWidth={1} className="absolute -right-3 -bottom-3 text-gray-200 opacity-60 w-12 h-12 sm:w-16 sm:h-16" />
                 <div className="flex items-center gap-3 mb-2 z-10">
                   <span className="text-gray-900 font-bold text-sm sm:text-base">Neutral</span>
-                  <div className="bg-white/60 text-gray-700 px-2 py-0.5 rounded-full text-[10px] sm:text-[11px] font-bold flex items-center gap-0.5 shadow-sm border border-gray-200/50">
-                     <TrendingUp size={11} strokeWidth={3} /> +{growthCounts.neutral}
-                  </div>
                 </div>
                 <div className="flex items-end gap-2 text-gray-600 z-10">
                   <span className="text-4xl sm:text-5xl font-black tracking-tighter">{leadCounts.neutral}</span>

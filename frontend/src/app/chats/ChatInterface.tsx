@@ -38,6 +38,8 @@ interface Message {
   timestampMs?: number; // For sentiment + accurate ordering
   media?: MediaAttachment[];
   transcript?: string | null;
+  sendStatus?: 'sending' | 'sent' | 'failed';
+  sendError?: string;
 }
 
 type MediaAttachment = {
@@ -56,10 +58,22 @@ type MediaAttachment = {
 type PendingImageAttachment = {
   kind: 'image';
   url: string;
+  dataUrl?: string;
   mimeType: string;
   fileName: string;
   size?: number;
 };
+
+type PendingAudioAttachment = {
+  kind: 'audio';
+  url: string;
+  dataUrl?: string;
+  mimeType: string;
+  fileName: string;
+  size?: number;
+};
+
+type PendingMediaAttachment = PendingImageAttachment | PendingAudioAttachment;
 
 const normalizeMediaList = (input: any): MediaAttachment[] => {
   if (!input) return [];
@@ -305,6 +319,9 @@ const ChatInterface = () => {
   const [selectedChannel, setSelectedChannel] = useState<'email' | 'whatsapp' | 'telegram'>(platformFromUrl);
   const [togglingReplyMode, setTogglingReplyMode] = useState(false);
   const [selectedImage, setSelectedImage] = useState<PendingImageAttachment | null>(null);
+  const [selectedAudio, setSelectedAudio] = useState<PendingAudioAttachment | null>(null);
+  const [recordingAudio, setRecordingAudio] = useState(false);
+  const [sendError, setSendError] = useState("");
 
   const currentCustomer = allCustomers.find(c => c.id === selectedCustomerId) || allCustomers[0];
   const filteredCustomers = useMemo(() => {
@@ -335,6 +352,8 @@ const ChatInterface = () => {
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
   const docInputRef = useRef<HTMLInputElement>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<BlobPart[]>([]);
   const leadRealtimeStateRef = useRef(new Map<string, { manualReplyMode: boolean; aiTyping: boolean; sentiment?: any }>());
 
   const handleImageSelected = (file: File | undefined | null) => {
@@ -348,6 +367,7 @@ const ChatInterface = () => {
       setSelectedImage({
         kind: 'image',
         url,
+        dataUrl: url,
         mimeType: file.type || 'image/jpeg',
         fileName: file.name || 'image',
         size: file.size,
@@ -355,6 +375,115 @@ const ChatInterface = () => {
       setShowPlusMenu(false);
     };
     reader.readAsDataURL(file);
+  };
+
+  const blobToDataUrl = (blob: Blob) =>
+    new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = typeof reader.result === 'string' ? reader.result : '';
+        result ? resolve(result) : reject(new Error('Could not read media data'));
+      };
+      reader.onerror = () => reject(reader.error || new Error('Could not read media data'));
+      reader.readAsDataURL(blob);
+    });
+
+  const normalizePendingMediaForSend = async (mediaItems: PendingMediaAttachment[]) => {
+    const normalized: PendingMediaAttachment[] = [];
+
+    for (const item of mediaItems) {
+      const url = String(item.dataUrl || item.url || '').trim();
+      if (/^data:/i.test(url) || /^https?:\/\//i.test(url)) {
+        normalized.push({ ...item, url });
+        continue;
+      }
+
+      if (/^blob:/i.test(url)) {
+        const response = await fetch(url);
+        if (!response.ok) throw new Error(`Could not read recorded media (${response.status})`);
+        const blob = await response.blob();
+        const dataUrl = await blobToDataUrl(blob);
+        normalized.push({
+          ...item,
+          url: dataUrl,
+          dataUrl,
+          mimeType: item.mimeType || blob.type || (item.kind === 'audio' ? 'audio/webm' : 'image/jpeg'),
+          size: item.size || blob.size,
+        } as PendingMediaAttachment);
+        continue;
+      }
+
+      throw new Error('Media is not ready yet. Please record or attach again.');
+    }
+
+    return normalized;
+  };
+
+  const stopAudioRecording = () => {
+    const recorder = mediaRecorderRef.current;
+    if (recorder && recorder.state !== 'inactive') recorder.stop();
+  };
+
+  const startAudioRecording = async () => {
+    if (recordingAudio) {
+      stopAudioRecording();
+      return;
+    }
+
+    if (!navigator?.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+      console.warn('[Chat] Audio recording is not supported in this browser');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+        ? 'audio/webm;codecs=opus'
+        : MediaRecorder.isTypeSupported('audio/webm')
+          ? 'audio/webm'
+          : '';
+      const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+
+      audioChunksRef.current = [];
+      mediaRecorderRef.current = recorder;
+
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
+      };
+
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        setRecordingAudio(false);
+
+        const type = recorder.mimeType || 'audio/webm';
+        const blob = new Blob(audioChunksRef.current, { type });
+        audioChunksRef.current = [];
+        if (!blob.size) return;
+
+        const reader = new FileReader();
+        reader.onload = () => {
+          const url = typeof reader.result === 'string' ? reader.result : '';
+          if (!url) return;
+          setSelectedAudio({
+            kind: 'audio',
+            url,
+            dataUrl: url,
+            mimeType: type,
+            fileName: `voice-message-${Date.now()}.webm`,
+            size: blob.size,
+          });
+          setSelectedImage(null);
+        };
+        reader.readAsDataURL(blob);
+      };
+
+      recorder.start();
+      setRecordingAudio(true);
+      setShowPlusMenu(false);
+    } catch (error) {
+      setRecordingAudio(false);
+      console.warn('[Chat] Could not start audio recording:', error);
+    }
   };
 
   const normalizeWhatsAppContact = (value: string) => {
@@ -864,6 +993,13 @@ const ChatInterface = () => {
     setShowPlusMenu(false);
   }, [selectedCustomerId]);
 
+  useEffect(() => {
+    return () => {
+      const recorder = mediaRecorderRef.current;
+      if (recorder && recorder.state !== 'inactive') recorder.stop();
+    };
+  }, []);
+
   const scrollToBottom = (behavior: ScrollBehavior = "auto") => {
     const container = messagesContainerRef.current;
     if (container) {
@@ -882,11 +1018,23 @@ const ChatInterface = () => {
 
   const handleSendMessage = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!inputValue.trim() && !selectedImage) return;
+    if (!inputValue.trim() && !selectedImage && !selectedAudio) return;
+    setSendError("");
     
     const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const messageText = inputValue.trim();
-    const pendingMedia = selectedImage ? [{ ...selectedImage }] : [];
+    const selectedMedia = [
+      ...(selectedImage ? [{ ...selectedImage }] : []),
+      ...(selectedAudio ? [{ ...selectedAudio }] : []),
+    ];
+    let pendingMedia: PendingMediaAttachment[] = [];
+    try {
+      pendingMedia = await normalizePendingMediaForSend(selectedMedia);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Media is not ready yet';
+      setSendError(message);
+      return;
+    }
     const optimisticId = Date.now().toString();
     
     // Optimistically add the message to the UI
@@ -902,6 +1050,7 @@ const ChatInterface = () => {
                 text: messageText,
                 time,
                 media: pendingMedia.length ? pendingMedia : undefined,
+                sendStatus: 'sending',
               },
             ],
           } 
@@ -909,6 +1058,7 @@ const ChatInterface = () => {
     ));
     setInputValue("");
     setSelectedImage(null);
+    setSelectedAudio(null);
     if (imageInputRef.current) imageInputRef.current.value = "";
     
     const isWhatsApp = selectedChannel === 'whatsapp';
@@ -943,16 +1093,44 @@ const ChatInterface = () => {
 
       if (!sendSucceeded) {
         console.error('Failed to send message', details);
-        // Remove the message if sending failed
+        const message = details?.details || details?.error || 'Failed to send message';
+        setSendError(message);
         setAllCustomers(prev => prev.map(c =>
           c.id === selectedCustomerId
-            ? { ...c, messages: c.messages.filter((m) => m.id !== optimisticId) }
+            ? {
+                ...c,
+                messages: c.messages.map((m) =>
+                  m.id === optimisticId ? { ...m, sendStatus: 'failed', sendError: message } : m
+                ),
+              }
             : c
         ));
-        if (pendingMedia.length) setSelectedImage(pendingMedia[0]);
+        const failedImage = pendingMedia.find((item) => item.kind === 'image') as PendingImageAttachment | undefined;
+        const failedAudio = pendingMedia.find((item) => item.kind === 'audio') as PendingAudioAttachment | undefined;
+        if (failedImage) setSelectedImage(failedImage);
+        if (failedAudio) setSelectedAudio(failedAudio);
       } else {
         const result = details || ({} as any);
         console.log('Message sent successfully', result);
+        const savedMedia = normalizeMediaList(result?.media);
+
+        setAllCustomers(prev => prev.map(c =>
+          c.id === selectedCustomerId
+            ? {
+                ...c,
+                messages: c.messages.map((m) =>
+                  m.id === optimisticId
+                    ? {
+                        ...m,
+                        media: savedMedia.length ? savedMedia : m.media,
+                        sendStatus: 'sent',
+                        sendError: undefined,
+                      }
+                    : m
+                ),
+              }
+            : c
+        ));
 
         if (USE_BROWSER_FIRESTORE_LISTENERS && !isWhatsApp) {
           // Best-effort: persist outbound email for conversation history (Resend route doesn't write to Firestore)
@@ -983,13 +1161,22 @@ const ChatInterface = () => {
       }
     } catch (error) {
       console.error('Error sending message:', error);
-      // Remove the message if sending failed
+      const message = error instanceof Error ? error.message : 'Failed to send message';
+      setSendError(message);
       setAllCustomers(prev => prev.map(c =>
         c.id === selectedCustomerId
-          ? { ...c, messages: c.messages.filter((m) => m.id !== optimisticId) }
+          ? {
+              ...c,
+              messages: c.messages.map((m) =>
+                m.id === optimisticId ? { ...m, sendStatus: 'failed', sendError: message } : m
+              ),
+            }
           : c
       ));
-      if (pendingMedia.length) setSelectedImage(pendingMedia[0]);
+      const failedImage = pendingMedia.find((item) => item.kind === 'image') as PendingImageAttachment | undefined;
+      const failedAudio = pendingMedia.find((item) => item.kind === 'audio') as PendingAudioAttachment | undefined;
+      if (failedImage) setSelectedImage(failedImage);
+      if (failedAudio) setSelectedAudio(failedAudio);
     } finally {
       setSendingMessage(false);
     }
@@ -1251,7 +1438,18 @@ const ChatInterface = () => {
                     </div>
                     <div className="flex items-center gap-1 mt-1 opacity-50 px-1">
                       <span className="text-[9px] font-bold text-gray-400">{msg.time}</span>
-                      {msg.sender === 'bot' && <CheckCheck size={10} className="text-blue-500" />}
+                      {msg.sender === 'bot' && msg.sendStatus === 'sending' ? (
+                        <>
+                          <Loader2 size={10} className="text-gray-400 animate-spin" />
+                          <span className="text-[9px] font-bold text-gray-400">Sending</span>
+                        </>
+                      ) : null}
+                      {msg.sender === 'bot' && msg.sendStatus === 'failed' ? (
+                        <span className="text-[9px] font-black text-red-500">{msg.sendError || 'Failed'}</span>
+                      ) : null}
+                      {msg.sender === 'bot' && msg.sendStatus !== 'sending' && msg.sendStatus !== 'failed' ? (
+                        <CheckCheck size={10} className="text-blue-500" />
+                      ) : null}
                     </div>
                   </div>
                 </div>
@@ -1343,6 +1541,29 @@ const ChatInterface = () => {
                   </button>
                 </div>
               ) : null}
+              {selectedAudio ? (
+                <div className="mb-2 flex items-center gap-2 rounded-xl border border-green-100 bg-green-50/70 p-1.5">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-white text-green-600">
+                    <Mic size={16} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[11px] font-black text-gray-800">{selectedAudio.fileName || 'Voice message'}</div>
+                    <audio controls src={selectedAudio.url} className="mt-1 h-8 w-full max-w-[260px]" />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedAudio(null)}
+                    className="p-1.5 rounded-lg text-gray-400 hover:bg-white hover:text-gray-700 transition-colors"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              ) : null}
+              {sendError ? (
+                <div className="mb-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-[11px] font-bold text-red-600">
+                  {sendError}
+                </div>
+              ) : null}
               <input 
                 type="text"
                 placeholder="Type your message..."
@@ -1353,10 +1574,18 @@ const ChatInterface = () => {
               />
             </div>
             <div className="flex items-center gap-1.5">
-              <button className="p-2 text-gray-300 hover:text-gray-600 transition-colors" disabled={sendingMessage}><Mic size={18} /></button>
+              <button
+                type="button"
+                onClick={startAudioRecording}
+                className={`p-2 transition-colors ${recordingAudio ? 'text-red-500 animate-pulse' : 'text-gray-300 hover:text-gray-600'}`}
+                disabled={sendingMessage}
+                title={recordingAudio ? 'Stop recording' : 'Record voice message'}
+              >
+                <Mic size={18} />
+              </button>
               <button 
                 onClick={() => handleSendMessage()}
-                disabled={sendingMessage || (!inputValue.trim() && !selectedImage)}
+                disabled={sendingMessage || (!inputValue.trim() && !selectedImage && !selectedAudio)}
                 className="p-2.5 bg-blue-600 text-white rounded-xl shadow-lg shadow-blue-200 hover:bg-black disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95"
               >
                 {sendingMessage ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}

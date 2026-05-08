@@ -15,7 +15,7 @@ class WhatsAppService {
   async sendMessage(to, message, options = {}) {
     try {
       if (this.provider === 'openclaw') {
-        return await openClawWhatsAppService.sendMessage(to, message);
+        return await openClawWhatsAppService.sendMessage(to, message, options);
       }
 
       const fromValue = String(process.env.TWILIO_WHATSAPP_NUMBER || '').trim();

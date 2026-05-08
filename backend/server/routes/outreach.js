@@ -122,7 +122,9 @@ router.get('/chats', async (req, res) => {
           ? await fetchCollectionDocs('inbound_emails', 500)
           : [];
 
-    const normalizedOutreachMessages = outreachDocs.map(normalizeChatMessage);
+    const normalizedOutreachMessages = outreachDocs
+      .map(normalizeChatMessage)
+      .filter((message) => String(message.status || '').toLowerCase() !== 'failed');
     const normalizedInboundMessages = inboundDocs.map((doc) => {
       const data = doc.data() || {};
       const message = normalizeChatMessage(doc);

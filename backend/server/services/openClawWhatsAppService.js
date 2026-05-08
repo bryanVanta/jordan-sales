@@ -32,6 +32,7 @@ const OPENCLAW_RPC_TIMEOUT_MS = (() => {
   return Math.max(1000, Math.floor(parsed));
 })();
 const OPENCLAW_WHATSAPP_AGENT_ID = (process.env.OPENCLAW_WHATSAPP_AGENT_ID || process.env.OPENCLAW_JORDAN_AGENT_ID || 'main').trim();
+const OPENCLAW_WHATSAPP_MEDIA_FLAG = (process.env.OPENCLAW_WHATSAPP_MEDIA_FLAG || '--media').trim();
 
 const shellEscapeSingleQuoted = (value = '') => String(value).replace(/'/g, `'\"'\"'`);
 const shQuote = (value = '') => `'${shellEscapeSingleQuoted(String(value))}'`;
@@ -207,15 +208,19 @@ class OpenClawWhatsAppService {
   // Try to send a WhatsApp message via the gateway HTTP REST API.
   // Used in production where SSH to the gateway LAN IP is not reachable.
   // Returns a result object or null if HTTP is not available/configured.
-  async sendMessageViaHttp(target, message) {
+  async sendMessageViaHttp(target, message, options = {}) {
     if (!OPENCLAW_GATEWAY_URL || isLocalhostGatewayUrl(OPENCLAW_GATEWAY_URL)) return null;
     const token = OPENCLAW_GATEWAY_TOKEN;
     if (!token) return null;
 
     const httpBase = OPENCLAW_GATEWAY_URL.replace(/^ws(s?)/, 'http$1').replace(/\/$/, '');
+    const mediaUrls = Array.isArray(options.mediaUrls)
+      ? options.mediaUrls.map((url) => String(url || '').trim()).filter(Boolean).slice(0, 10)
+      : [];
     const body = JSON.stringify({
       target,
       message,
+      ...(mediaUrls.length ? { mediaUrls, mediaUrl: mediaUrls[0] } : {}),
       ...(OPENCLAW_WHATSAPP_ACCOUNT ? { account: OPENCLAW_WHATSAPP_ACCOUNT } : {}),
     });
 
@@ -368,10 +373,13 @@ class OpenClawWhatsAppService {
     return false;
   }
 
-  async sendMessage(to, message) {
+  async sendMessage(to, message, options = {}) {
     const rawTo = String(to || '').trim();
     const target = normalizeE164(to);
     const trimmedMessage = String(message || '').trim();
+    const mediaUrls = Array.isArray(options.mediaUrls)
+      ? options.mediaUrls.map((url) => String(url || '').trim()).filter(Boolean).slice(0, 10)
+      : [];
 
     if (!target) {
       return {
@@ -380,14 +388,14 @@ class OpenClawWhatsAppService {
         details: rawTo ? `Invalid target: ${rawTo}` : null,
       };
     }
-    if (!trimmedMessage) {
+    if (!trimmedMessage && mediaUrls.length === 0) {
       return { success: false, error: 'Missing message body' };
     }
 
     // When a public gateway URL is set (e.g. Cloudflare tunnel on Render), skip SSH entirely
     // and use the HTTP REST API. SSH only works from the local LAN.
     if (!isLocalhostGatewayUrl(OPENCLAW_GATEWAY_URL)) {
-      const httpResult = await this.sendMessageViaHttp(target, trimmedMessage);
+      const httpResult = await this.sendMessageViaHttp(target, trimmedMessage || ' ', { mediaUrls });
       if (httpResult) return httpResult;
       // HTTP failed — log and fall through to SSH as last resort
       console.warn('[OpenClaw] HTTP send failed; falling back to SSH');
@@ -403,6 +411,10 @@ class OpenClawWhatsAppService {
     const accountArg = OPENCLAW_WHATSAPP_ACCOUNT
       ? ` --account '${shellEscapeSingleQuoted(OPENCLAW_WHATSAPP_ACCOUNT)}'`
       : '';
+    const gatewayEnv =
+      `OPENCLAW_GATEWAY_URL='${shellEscapeSingleQuoted(remoteGatewayUrl)}' ` +
+      (OPENCLAW_GATEWAY_TOKEN ? `OPENCLAW_GATEWAY_TOKEN='${shellEscapeSingleQuoted(OPENCLAW_GATEWAY_TOKEN)}' ` : '') +
+      (OPENCLAW_GATEWAY_TOKEN ? `OPENCLAW_JORDAN_GATEWAY_TOKEN='${shellEscapeSingleQuoted(OPENCLAW_GATEWAY_TOKEN)}' ` : '');
     // Pipe message via stdin — openclaw message send reads the body from stdin.
     // NOTE: OpenClaw CLI variants differ; we try `--message` first, then stdin fallback.
     const runAndParse = async ({ remoteCommand, stdinPayload }) => {
@@ -450,17 +462,20 @@ class OpenClawWhatsAppService {
     };
 
     const sendForTarget = async (targetCandidate) => {
+      const mediaArg = mediaUrls.length && OPENCLAW_WHATSAPP_MEDIA_FLAG
+        ? ` ${shellEscapeSingleQuoted(OPENCLAW_WHATSAPP_MEDIA_FLAG)} '${shellEscapeSingleQuoted(mediaUrls[0])}'`
+        : '';
       const innerScriptWithMessage =
         `set -eu; ` +
         `TARGET='${shellEscapeSingleQuoted(targetCandidate)}'; ` +
-        `MSG='${shellEscapeSingleQuoted(trimmedMessage)}'; ` +
-        `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 '${cli}' message send --json --channel whatsapp ` +
-        `--target "$TARGET"${accountArg} --message "$MSG"`;
+        `MSG='${shellEscapeSingleQuoted(trimmedMessage || ' ')}'; ` +
+        `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 ${gatewayEnv}'${cli}' message send --json --channel whatsapp ` +
+        `--target "$TARGET"${accountArg} --message "$MSG"${mediaArg}`;
 
       const innerScriptViaStdin =
         `set -eu; ` +
         `TARGET='${shellEscapeSingleQuoted(targetCandidate)}'; ` +
-        `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 '${cli}' message send --json --channel whatsapp ` +
+        `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 ${gatewayEnv}'${cli}' message send --json --channel whatsapp ` +
         `--target "$TARGET"${accountArg}`;
 
       // Prefer `--message` (newer OpenClaw CLIs require it). If the CLI doesn't support it,

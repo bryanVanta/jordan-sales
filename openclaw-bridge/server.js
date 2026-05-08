@@ -14,6 +14,7 @@ const OPENCLAW_BRIDGE_JOB_TTL_MS = Number(process.env.OPENCLAW_BRIDGE_JOB_TTL_MS
 const OPENCLAW_BRIDGE_PRODUCTINFO_MODE = String(process.env.OPENCLAW_BRIDGE_PRODUCTINFO_MODE || 'full')
   .trim()
   .toLowerCase();
+const OPENCLAW_WHATSAPP_MEDIA_FLAG = String(process.env.OPENCLAW_WHATSAPP_MEDIA_FLAG || '--media').trim();
 const OPENCLAW_BRIDGE_MAX_STRING_CHARS = Number(process.env.OPENCLAW_BRIDGE_MAX_STRING_CHARS || 4000);
 const OPENCLAW_BRIDGE_MAX_ARRAY_ITEMS = Number(process.env.OPENCLAW_BRIDGE_MAX_ARRAY_ITEMS || 50);
 const OPENCLAW_BRIDGE_MAX_OBJECT_KEYS = Number(process.env.OPENCLAW_BRIDGE_MAX_OBJECT_KEYS || 80);
@@ -282,7 +283,7 @@ const callOpenClawViaDocker = async ({ agentId, message, token, timeoutMs }) => 
 };
 
 const app = express();
-app.use(express.json({ limit: '1mb' }));
+app.use(express.json({ limit: '2mb' }));
 
 const jobs = new Map();
 
@@ -302,19 +303,33 @@ app.get('/health', (_req, res) => {
 
 const shEscape = (value = '') => String(value).replace(/'/g, `'\"'\"'`);
 
-const sendWhatsAppViaDocker = async ({ target, message, account, timeoutMs }) => {
+const normalizeMediaUrls = (input) => {
+  const raw = Array.isArray(input) ? input : input ? [input] : [];
+  return raw.map((url) => String(url || '').trim()).filter((url) => /^https?:\/\//i.test(url)).slice(0, 10);
+};
+
+const sendWhatsAppViaDocker = async ({ target, message, account, mediaUrls = [], timeoutMs }) => {
   const accountArg = account ? ` --account '${shEscape(account)}'` : '';
+  const mediaArg = mediaUrls.length && OPENCLAW_WHATSAPP_MEDIA_FLAG
+    ? ` ${OPENCLAW_WHATSAPP_MEDIA_FLAG} '${shEscape(mediaUrls[0])}'`
+    : '';
+  const token = (process.env.OPENCLAW_JORDAN_GATEWAY_TOKEN || process.env.OPENCLAW_GATEWAY_TOKEN || '').trim();
+  const gatewayEnv =
+    `OPENCLAW_GATEWAY_URL='${shEscape(OPENCLAW_GATEWAY_WS_URL)}' ` +
+    (token ? `OPENCLAW_GATEWAY_TOKEN='${shEscape(token)}' OPENCLAW_JORDAN_GATEWAY_TOKEN='${shEscape(token)}' ` : '');
   const cmd =
     `set -eu; ` +
-    `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 ` +
+    `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1 ${gatewayEnv}` +
     `openclaw message send --json --channel whatsapp ` +
     `--target '${shEscape(target)}'${accountArg} ` +
-    `--message '${shEscape(message)}'`;
+    `--message '${shEscape(message)}'${mediaArg}`;
 
   return await new Promise((resolve, reject) => {
-    const child = spawn('docker', ['exec', '-i', DOCKER_CONTAINER, 'sh', '-lc', cmd], {
+    const run = (command) => spawn('docker', ['exec', '-i', DOCKER_CONTAINER, 'sh', '-lc', command], {
       windowsHide: true,
     });
+
+    let child = run(cmd);
 
     let stdout = '';
     let stderr = '';
@@ -330,7 +345,17 @@ const sendWhatsAppViaDocker = async ({ target, message, account, timeoutMs }) =>
     child.on('close', (code) => {
       clearTimeout(killTimer);
       if (code !== 0) {
-        reject(new Error((stderr || stdout || '').trim().slice(0, 500) || `docker exec exit ${code}`));
+        const combined = (stderr || stdout || '').trim();
+        const mediaFlagUnsupported =
+          mediaUrls.length &&
+          /unknown (option|flag).*media|unrecognized (option|argument).*media|unexpected argument.*media/i.test(combined);
+
+        if (mediaFlagUnsupported) {
+          reject(new Error(`OpenClaw CLI does not support ${OPENCLAW_WHATSAPP_MEDIA_FLAG || 'media sends'} on this gateway build: ${combined.slice(0, 400)}`));
+          return;
+        }
+
+        reject(new Error(combined.slice(0, 500) || `docker exec exit ${code}`));
         return;
       }
       resolve({ stdout, stderr });
@@ -351,16 +376,17 @@ app.post('/api/channels/whatsapp/send', async (req, res) => {
   }
 
   const { target, message, account } = req.body || {};
+  const mediaUrls = normalizeMediaUrls(req.body?.mediaUrls || req.body?.mediaUrl);
   if (!target || !message) {
     return res.status(400).json({ error: 'Missing target or message' });
   }
 
   try {
     const timeoutMs = Number(process.env.OPENCLAW_TIMEOUT_MS || 30000);
-    const { stdout } = await sendWhatsAppViaDocker({ target, message, account, timeoutMs });
+    const { stdout } = await sendWhatsAppViaDocker({ target, message, account, mediaUrls, timeoutMs });
     const parsed = parseJsonObject(stdout);
     const messageId = parsed?.messageId || parsed?.id || parsed?.data?.id || null;
-    res.status(200).json({ success: true, messageId, raw: parsed || stdout.slice(0, 500) });
+    res.status(200).json({ success: true, messageId, mediaSent: mediaUrls.length > 0, raw: parsed || stdout.slice(0, 500) });
   } catch (err) {
     console.error('[openclaw-bridge] WhatsApp send failed:', err.message);
     res.status(502).json({ success: false, error: err.message });

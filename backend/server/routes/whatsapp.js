@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { db } = require('../config/firebase');
 const whatsappService = require('../services/whatsappService');
-const { maybeStoreInboundMedia } = require('../services/mediaStorageService');
+const { storeOutboundMedia } = require('../services/mediaStorageService');
 
 /**
  * POST /api/whatsapp/send
@@ -35,11 +35,34 @@ router.post('/send', async (req, res) => {
 
     console.log(`[WhatsApp] Sending message to ${contactWhatsApp} for lead ${leadId}`);
 
-    const storedMedia = await maybeStoreInboundMedia({ media: mediaList }).catch(() =>
-      mediaList.length === 1 ? mediaList[0] : mediaList.length ? mediaList : null
-    );
+    let storedMedia = null;
+    try {
+      storedMedia = mediaList.length ? await storeOutboundMedia({ media: mediaList }) : null;
+    } catch (mediaError) {
+      const message = mediaError instanceof Error ? mediaError.message : String(mediaError);
+      console.warn('[WhatsApp] Outbound media upload failed:', message);
+      return res.status(400).json({
+        success: false,
+        error: 'Failed to prepare WhatsApp media',
+        details: message,
+      });
+    }
+
     const storedMediaList = Array.isArray(storedMedia) ? storedMedia : storedMedia ? [storedMedia] : [];
     const mediaUrls = storedMediaList.map((item) => String(item?.url || '').trim()).filter((url) => /^https?:\/\//i.test(url));
+    if (mediaList.length > 0 && mediaUrls.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Failed to prepare WhatsApp media',
+        details: 'Media was provided but no public HTTPS media URL was produced.',
+      });
+    }
+
+    const mediaPreview = storedMediaList.some((item) => String(item?.kind || '').toLowerCase() === 'audio')
+      ? '[Voice message]'
+      : storedMediaList.length
+        ? '[Image]'
+        : '';
 
     const sendResult = await whatsappService.sendMessage(contactWhatsApp, messageText || (mediaUrls.length ? ' ' : ''), { mediaUrls });
     if (!sendResult?.success) {
@@ -57,7 +80,7 @@ router.post('/send', async (req, res) => {
       channel: 'whatsapp',
       messageSubject: null,
       messageContent: messageText,
-      messagePreview: (messageText || (storedMediaList.length ? '[Image]' : '')).substring(0, 200),
+      messagePreview: (messageText || mediaPreview).substring(0, 200),
       status: sendResult.success ? 'sent' : 'failed',
       errorMessage: sendResult.error || null,
       errorDetails: sendResult.details || null,

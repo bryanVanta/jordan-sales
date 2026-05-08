@@ -11,6 +11,11 @@ const TWILIO_AUTH_TOKEN = String(process.env.TWILIO_AUTH_TOKEN || '').trim();
 
 const cloudinaryEnabled = () => Boolean(CLOUDINARY_CLOUD_NAME && CLOUDINARY_API_KEY && CLOUDINARY_API_SECRET);
 
+const normalizeMimeType = (mimeType = '') => {
+  const first = String(mimeType || '').split(';')[0].trim().toLowerCase();
+  return first || '';
+};
+
 const withTimeout = async (promise, timeoutMs, label = 'operation') => {
   const ms = Number(timeoutMs);
   if (!Number.isFinite(ms) || ms <= 0) return await promise;
@@ -30,7 +35,7 @@ const withTimeout = async (promise, timeoutMs, label = 'operation') => {
 const sha1Hex = (input) => crypto.createHash('sha1').update(String(input)).digest('hex');
 
 const guessExtension = (mimeType = '') => {
-  const mt = String(mimeType || '').toLowerCase();
+  const mt = normalizeMimeType(mimeType);
   if (mt === 'image/jpeg') return 'jpg';
   if (mt === 'image/jpg') return 'jpg';
   if (mt === 'image/png') return 'png';
@@ -38,9 +43,12 @@ const guessExtension = (mimeType = '') => {
   if (mt === 'image/gif') return 'gif';
   if (mt === 'audio/ogg') return 'ogg';
   if (mt === 'audio/opus') return 'opus';
+  if (mt.startsWith('audio/webm')) return 'webm';
   if (mt === 'audio/mpeg') return 'mp3';
   if (mt === 'audio/mp3') return 'mp3';
   if (mt === 'audio/wav') return 'wav';
+  if (mt === 'audio/mp4') return 'm4a';
+  if (mt === 'audio/aac') return 'aac';
   if (mt === 'video/mp4') return 'mp4';
   return '';
 };
@@ -56,12 +64,14 @@ const isHttpUrl = (value) => {
 
 const parseDataUrl = (value) => {
   const text = String(value || '').trim();
-  const match = text.match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
+  const match = text.match(/^data:([^,]*),(.*)$/s);
   if (!match) return null;
 
-  const mimeType = String(match[1] || 'application/octet-stream').trim();
-  const isBase64 = Boolean(match[2]);
-  const data = String(match[3] || '');
+  const meta = String(match[1] || '').trim();
+  const metaParts = meta.split(';').map((part) => part.trim()).filter(Boolean);
+  const mimeType = metaParts[0] && metaParts[0].includes('/') ? metaParts[0] : 'application/octet-stream';
+  const isBase64 = metaParts.some((part) => part.toLowerCase() === 'base64');
+  const data = String(match[2] || '');
   if (!data) return null;
 
   try {
@@ -162,6 +172,11 @@ const uploadBufferToCloudinary = async ({ buffer, mimeType, fileName, kind }) =>
   };
 };
 
+const cloudinaryAudioDeliveryUrl = (uploaded) => {
+  if (!uploaded?.publicId || uploaded.resourceType !== 'video' || !CLOUDINARY_CLOUD_NAME) return uploaded?.url || '';
+  return `https://res.cloudinary.com/${encodeURIComponent(CLOUDINARY_CLOUD_NAME)}/video/upload/f_mp3/${uploaded.publicId}.mp3`;
+};
+
 const normalizeMediaList = (media) => {
   if (!media) return [];
   if (Array.isArray(media)) return media.filter(Boolean);
@@ -194,13 +209,13 @@ const maybeStoreInboundMedia = async ({ media, timeoutMs = 20000 } = {}) => {
   for (const item of items.slice(0, 10)) {
     try {
       const originalUrl = String(item?.url || '').trim();
-      const mimeTypeHint = String(item?.mimeType || item?.mimetype || '').trim();
+      const mimeTypeHint = normalizeMimeType(item?.mimeType || item?.mimetype || '');
       const fileNameHint = String(item?.fileName || item?.filename || item?.name || '').trim();
       const kind = inferKindFromMedia(item);
 
       const dataUrl = parseDataUrl(originalUrl);
       if (dataUrl) {
-        const mimeType = mimeTypeHint || dataUrl.mimeType || 'application/octet-stream';
+        const mimeType = mimeTypeHint || normalizeMimeType(dataUrl.mimeType) || 'application/octet-stream';
         const uploaded = await withTimeout(
           uploadBufferToCloudinary({ buffer: dataUrl.buffer, mimeType, fileName: fileNameHint, kind: kind === 'audio' ? 'audio' : 'image' }),
           timeoutMs,
@@ -210,7 +225,7 @@ const maybeStoreInboundMedia = async ({ media, timeoutMs = 20000 } = {}) => {
         stored.push({
           ...item,
           kind: kind === 'audio' ? 'audio' : kind === 'image' ? 'image' : item?.kind || 'unknown',
-          url: uploaded.url,
+          url: kind === 'audio' ? cloudinaryAudioDeliveryUrl(uploaded) : uploaded.url,
           cloudinary: {
             publicId: uploaded.publicId,
             bytes: uploaded.bytes,
@@ -233,7 +248,7 @@ const maybeStoreInboundMedia = async ({ media, timeoutMs = 20000 } = {}) => {
         'media download'
       );
 
-      const mimeType = mimeTypeHint || contentType || 'application/octet-stream';
+      const mimeType = mimeTypeHint || normalizeMimeType(contentType) || 'application/octet-stream';
       const uploaded = await withTimeout(
         uploadBufferToCloudinary({ buffer, mimeType, fileName: fileNameHint, kind: kind === 'audio' ? 'audio' : 'image' }),
         timeoutMs,
@@ -243,7 +258,7 @@ const maybeStoreInboundMedia = async ({ media, timeoutMs = 20000 } = {}) => {
       stored.push({
         ...item,
         kind: kind === 'audio' ? 'audio' : kind === 'image' ? 'image' : item?.kind || 'unknown',
-        url: uploaded.url,
+        url: kind === 'audio' ? cloudinaryAudioDeliveryUrl(uploaded) : uploaded.url,
         cloudinary: {
           publicId: uploaded.publicId,
           bytes: uploaded.bytes,
@@ -260,6 +275,73 @@ const maybeStoreInboundMedia = async ({ media, timeoutMs = 20000 } = {}) => {
   return stored.length === 1 ? stored[0] : stored;
 };
 
+const describeUrlScheme = (value = '') => {
+  const text = String(value || '').trim();
+  const match = text.match(/^([a-z][a-z0-9+.-]*):/i);
+  return match ? match[1].toLowerCase() : 'missing';
+};
+
+const storeOutboundMedia = async ({ media, timeoutMs = 30000 } = {}) => {
+  const items = normalizeMediaList(media);
+  if (items.length === 0) return null;
+  if (!cloudinaryEnabled()) {
+    throw new Error('Cloudinary is required for outbound WhatsApp media because OpenClaw needs a public HTTPS media URL.');
+  }
+
+  const stored = [];
+  for (const item of items.slice(0, 10)) {
+    const originalUrl = String(item?.url || '').trim();
+    const mimeTypeHint = normalizeMimeType(item?.mimeType || item?.mimetype || '');
+    const fileNameHint = String(item?.fileName || item?.filename || item?.name || '').trim();
+    const kind = inferKindFromMedia(item);
+
+    if (!originalUrl) throw new Error('Outbound media is missing url.');
+
+    const dataUrl = parseDataUrl(originalUrl);
+    if (dataUrl) {
+      const mimeType = mimeTypeHint || normalizeMimeType(dataUrl.mimeType) || 'application/octet-stream';
+      const uploaded = await withTimeout(
+        uploadBufferToCloudinary({
+          buffer: dataUrl.buffer,
+          mimeType,
+          fileName: fileNameHint,
+          kind: kind === 'audio' ? 'audio' : 'image',
+        }),
+        timeoutMs,
+        'cloudinary upload'
+      );
+
+      stored.push({
+        ...item,
+        kind: kind === 'audio' ? 'audio' : kind === 'image' ? 'image' : item?.kind || 'unknown',
+        url: kind === 'audio' ? cloudinaryAudioDeliveryUrl(uploaded) : uploaded.url,
+        cloudinary: {
+          publicId: uploaded.publicId,
+          bytes: uploaded.bytes,
+          resourceType: uploaded.resourceType,
+        },
+        originalUrl: 'data-url',
+        mimeType,
+      });
+      continue;
+    }
+
+    if (!isHttpUrl(originalUrl)) {
+      throw new Error(`Outbound media URL must be a data URL or public http(s) URL. Received scheme: ${describeUrlScheme(originalUrl)}.`);
+    }
+
+    stored.push({
+      ...item,
+      kind: kind === 'audio' ? 'audio' : kind === 'image' ? 'image' : item?.kind || 'unknown',
+      url: originalUrl,
+      mimeType: mimeTypeHint || item?.mimeType,
+    });
+  }
+
+  return stored.length === 1 ? stored[0] : stored;
+};
+
 module.exports = {
   maybeStoreInboundMedia,
+  storeOutboundMedia,
 };

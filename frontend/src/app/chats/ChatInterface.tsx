@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { 
   Search, 
@@ -295,6 +295,7 @@ const ChatInterface = () => {
   const [inputValue, setInputValue] = useState("");
   const [showPlusMenu, setShowPlusMenu] = useState(false);
   const [allCustomers, setAllCustomers] = useState<CustomerData[]>([]);
+  const [searchTerm, setSearchTerm] = useState("");
   const [loadingChats, setLoadingChats] = useState(true);
   const [activeView, setActiveView] = useState<'list' | 'chat' | 'info'>('list');
   const [loadingMessages, setLoadingMessages] = useState(false);
@@ -306,6 +307,29 @@ const ChatInterface = () => {
   const [selectedImage, setSelectedImage] = useState<PendingImageAttachment | null>(null);
 
   const currentCustomer = allCustomers.find(c => c.id === selectedCustomerId) || allCustomers[0];
+  const filteredCustomers = useMemo(() => {
+    const term = searchTerm.trim().toLowerCase();
+    if (!term) return allCustomers;
+
+    return allCustomers.filter((customer) => {
+      const latestMessage = customer.messages[customer.messages.length - 1];
+      const haystack = [
+        customer.company,
+        customer.name,
+        customer.email,
+        customer.whatsapp,
+        customer.contactWhatsApp,
+        customer.sentiment,
+        latestMessage?.text,
+        latestMessage?.media?.length ? describeMedia(latestMessage.media) : '',
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+
+      return haystack.includes(term);
+    });
+  }, [allCustomers, searchTerm]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
@@ -1013,6 +1037,8 @@ const ChatInterface = () => {
             <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-300" size={16} />
             <input 
               type="text"
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
               placeholder="Search"
               className="w-full bg-gray-50 border border-gray-100 rounded-xl py-2.5 pl-10 pr-4 text-[12px] font-bold text-gray-800 focus:ring-2 focus:ring-blue-100 outline-none transition-all shadow-inner"
             />
@@ -1031,8 +1057,8 @@ const ChatInterface = () => {
                   </div>
                 ))}
               </div>
-            ) : allCustomers.length > 0 ? (
-              allCustomers.map((customer) => {
+            ) : filteredCustomers.length > 0 ? (
+              filteredCustomers.map((customer) => {
                 const lastMessage = customer.messages.length > 0 ? customer.messages[customer.messages.length - 1] : null;
                 const lastMsg = !lastMessage
                   ? "No messages"
@@ -1093,6 +1119,12 @@ const ChatInterface = () => {
                 </button>
               )
             })
+            ) : searchTerm.trim() ? (
+              <div className="flex flex-col items-center justify-center h-full py-12 text-center px-4">
+                <Search size={42} className="text-gray-300 mb-3" />
+                <p className="text-gray-500 font-medium text-sm">No matching conversations</p>
+                <p className="text-gray-400 text-xs mt-1">Try company, contact, channel, or message text</p>
+              </div>
             ) : (
               <div className="flex flex-col items-center justify-center h-full py-12 text-center px-4">
                 <Cloud size={48} className="text-gray-300 mb-3" />

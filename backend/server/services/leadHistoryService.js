@@ -37,8 +37,8 @@ async function getSentimentTrends(productInfoId = 'current', days = 30) {
   try {
     const resolvedProductInfoId = productInfoId || 'current';
     
-    // This query gets the most recent sentiment record for each lead for each day in the last N days.
-    // We use a generate_series to ensure we have all days represented.
+    // Return every day in the requested window. Days before any recorded
+    // sentiment stay at zero instead of disappearing from the chart.
     const res = await query(
       `WITH date_series AS (
          SELECT generate_series(
@@ -47,15 +47,27 @@ async function getSentimentTrends(productInfoId = 'current', days = 30) {
            interval '1 day'
          )::date AS day
        ),
+       relevant_leads AS (
+         SELECT DISTINCT lead_id
+         FROM lead_sentiment_history
+         WHERE (product_info_id = $1 OR product_info_id IS NULL)
+       ),
        latest_daily_sentiment AS (
-         SELECT DISTINCT ON (day, lead_id)
+         SELECT
            d.day,
-           h.lead_id,
-           h.sentiment
+           l.lead_id,
+           latest.sentiment
          FROM date_series d
-         LEFT JOIN lead_sentiment_history h ON h.recorded_at::date <= d.day
-         WHERE (h.product_info_id = $1 OR h.product_info_id IS NULL)
-         ORDER BY day, lead_id, h.recorded_at DESC
+         LEFT JOIN relevant_leads l ON true
+         LEFT JOIN LATERAL (
+           SELECT h.sentiment
+           FROM lead_sentiment_history h
+           WHERE h.lead_id = l.lead_id
+             AND (h.product_info_id = $1 OR h.product_info_id IS NULL)
+             AND h.recorded_at::date <= d.day
+           ORDER BY h.recorded_at DESC
+           LIMIT 1
+         ) latest ON true
        )
        SELECT 
          to_char(day, 'DD/MM') as name,
@@ -64,7 +76,6 @@ async function getSentimentTrends(productInfoId = 'current', days = 30) {
          count(*) FILTER (WHERE sentiment = 'warm') as warm,
          count(*) FILTER (WHERE sentiment = 'cold') as cold
        FROM latest_daily_sentiment
-       WHERE sentiment IS NOT NULL
        GROUP BY day
        ORDER BY day ASC`,
       [resolvedProductInfoId, days]
